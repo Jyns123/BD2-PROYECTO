@@ -1,255 +1,295 @@
-import pickle
-from storage.disk_manager import DiskManager
-
-PAGE_SIZE = 4096
+import struct
+from storage.disk_manager import DiskManager, PAGE_SIZE
 
 
-# -----------------------------
-# NODOS
-# -----------------------------
-
-class LeafNode:
-    def __init__(self):
-        self.is_leaf = True
+class Node:
+    def __init__(self, is_leaf):
+        self.is_leaf = is_leaf
         self.keys = []
-        self.records = []
-        self.next_leaf = -1
+        self.children = []   # hijos o registros
+        self.next = -1       # siguiente hoja
 
-
-class InternalNode:
-    def __init__(self):
-        self.is_leaf = False
-        self.keys = []
-        self.children = []  # len = keys + 1
-
-
-# -----------------------------
-# B+ TREE
-# -----------------------------
 
 class BPlusTree:
-
-    def __init__(self, path, record_size, key_fn, order=4):
-        self.dm = DiskManager(path)
+    def __init__(self, file_path, record_size, key_extractor, order=4):
+        self.dm = DiskManager(file_path)
         self.record_size = record_size
-        self.key_fn = key_fn
+        self.key_extractor = key_extractor
         self.order = order
 
-        self.root = self._new_leaf()
+        # root persistente simple (página 1 si existe)
+        if self.dm._get_total_pages() == 1:
+            self.root = self._new_leaf()
+        else:
+            self.root = 1  # asumimos root en página 1
 
-    # -----------------------------
+    # -------------------------
     # SERIALIZACIÓN
-    # -----------------------------
+    # -------------------------
 
-    def _write_node(self, pid, node):
-        data = pickle.dumps(node)
-        if len(data) > PAGE_SIZE:
-            raise ValueError("Nodo excede PAGE_SIZE")
-        data = data.ljust(PAGE_SIZE, b'\x00')
-        self.dm.write_page(pid, data)
+    def _serialize(self, node):
+        data = bytearray(PAGE_SIZE)
 
-    def _read_node(self, pid):
-        raw = self.dm.read_page(pid)
-        return pickle.loads(raw.rstrip(b'\x00'))
+        # tipo nodo
+        data[0] = 1 if node.is_leaf else 0
 
-    # -----------------------------
-    # CREACIÓN
-    # -----------------------------
+        # cantidad claves
+        data[1:5] = len(node.keys).to_bytes(4, 'big')
+
+        offset = 5
+
+        # keys
+        for k in node.keys:
+            data[offset:offset+4] = int(k).to_bytes(4, 'big')
+            offset += 4
+
+        # next (hojas)
+        next_ptr = node.next if node.next >= 0 else 0
+        data[offset:offset+4] = next_ptr.to_bytes(4, 'big')
+        offset += 4
+
+        if node.is_leaf:
+            for rec in node.children:
+                data[offset:offset+self.record_size] = rec
+                offset += self.record_size
+        else:
+            for child in node.children:
+                data[offset:offset+4] = int(child).to_bytes(4, 'big')
+                offset += 4
+
+        return bytes(data)
+
+    def _deserialize(self, data):
+        is_leaf = data[0] == 1
+        n_keys = int.from_bytes(data[1:5], 'big')
+
+        node = Node(is_leaf)
+        offset = 5
+
+        for _ in range(n_keys):
+            k = int.from_bytes(data[offset:offset+4], 'big')
+            node.keys.append(k)
+            offset += 4
+
+        node.next = int.from_bytes(data[offset:offset+4], 'big')
+        if node.next == 0:
+            node.next = -1
+        offset += 4
+
+        if is_leaf:
+            for _ in range(n_keys):
+                rec = data[offset:offset+self.record_size]
+                node.children.append(rec)
+                offset += self.record_size
+        else:
+            for _ in range(n_keys + 1):
+                child = int.from_bytes(data[offset:offset+4], 'big')
+                node.children.append(child)
+                offset += 4
+
+        return node
+
+    # -------------------------
+    # IO
+    # -------------------------
+
+    def _read_node(self, page_id):
+        data = self.dm.read_page(page_id)
+        return self._deserialize(data)
+
+    def _write_node(self, page_id, node):
+        self.dm.write_page(page_id, self._serialize(node))
 
     def _new_leaf(self):
+        node = Node(is_leaf=True)
         pid = self.dm.allocate_page()
-        self._write_node(pid, LeafNode())
+        self._write_node(pid, node)
         return pid
 
     def _new_internal(self):
+        node = Node(is_leaf=False)
         pid = self.dm.allocate_page()
-        self._write_node(pid, InternalNode())
+        self._write_node(pid, node)
         return pid
 
-    # -----------------------------
-    # FIND LEAF (FIX CRÍTICO)
-    # -----------------------------
-
-    def _find_leaf(self, node_id, key):
-        node = self._read_node(node_id)
-
-        if node.is_leaf:
-            return node_id
-
-        i = 0
-        # CAMBIO CLAVE: > en vez de >=
-        while i < len(node.keys) and key > node.keys[i]:
-            i += 1
-
-        return self._find_leaf(node.children[i], key)
-
-    # -----------------------------
-    # SEARCH (soporta duplicados)
-    # -----------------------------
-
-    def search(self, key):
-        leaf_id = self._find_leaf(self.root, key)
-        results = []
-
-        while leaf_id != -1:
-            leaf = self._read_node(leaf_id)
-
-            for k, r in zip(leaf.keys, leaf.records):
-                if k == key:
-                    results.append(r)
-                elif k > key:
-                    return results
-
-            leaf_id = leaf.next_leaf
-
-        return results
-
-    # -----------------------------
-    # RANGE SEARCH
-    # -----------------------------
-
-    def range_search(self, begin, end):
-        leaf_id = self._find_leaf(self.root, begin)
-        results = []
-
-        while leaf_id != -1:
-            leaf = self._read_node(leaf_id)
-
-            for k, r in zip(leaf.keys, leaf.records):
-                if begin <= k <= end:
-                    results.append(r)
-                elif k > end:
-                    return results
-
-            leaf_id = leaf.next_leaf
-
-        return results
-
-    # -----------------------------
+    # -------------------------
     # INSERT
-    # -----------------------------
+    # -------------------------
 
     def insert(self, record):
-        key = self.key_fn(record)
+        key = self.key_extractor(record)
 
         split = self._insert_recursive(self.root, key, record)
 
         if split:
-            new_root = self._new_internal()
-            root_node = self._read_node(new_root)
+            new_root = Node(is_leaf=False)
+            new_root.keys = [split[0]]
+            new_root.children = [self.root, split[1]]
 
-            root_node.keys = [split[0]]
-            root_node.children = [self.root, split[1]]
-
-            self._write_node(new_root, root_node)
-            self.root = new_root
+            root_id = self._new_internal()
+            self._write_node(root_id, new_root)
+            self.root = root_id
 
     def _insert_recursive(self, node_id, key, record):
         node = self._read_node(node_id)
 
-        # ---------------- LEAF ----------------
         if node.is_leaf:
-            self._insert_in_leaf(node, key, record)
+            i = 0
+            while i < len(node.keys) and node.keys[i] < key:
+                i += 1
 
-            if len(node.keys) < self.order:
+            node.keys.insert(i, key)
+            node.children.insert(i, record)
+
+            if len(node.keys) <= self.order:
                 self._write_node(node_id, node)
                 return None
 
             return self._split_leaf(node_id, node)
 
-        # ---------------- INTERNAL ----------------
-        i = 0
-        while i < len(node.keys) and key >= node.keys[i]:
-            i += 1
+        else:
+            i = 0
+            while i < len(node.keys) and key > node.keys[i]:  # FIX CLAVE
+                i += 1
 
-        child_id = node.children[i]
-        split = self._insert_recursive(child_id, key, record)
+            split = self._insert_recursive(node.children[i], key, record)
 
-        if not split:
-            return None
+            if not split:
+                return None
 
-        split_key, new_child = split
+            new_key, new_child = split
 
-        node.keys.insert(i, split_key)
-        node.children.insert(i + 1, new_child)
+            node.keys.insert(i, new_key)
+            node.children.insert(i + 1, new_child)
 
-        if len(node.children) != len(node.keys) + 1:
-            raise Exception("Invariante rota: children != keys + 1")
+            if len(node.keys) <= self.order:
+                self._write_node(node_id, node)
+                return None
 
-        if len(node.keys) < self.order:
-            self._write_node(node_id, node)
-            return None
+            return self._split_internal(node_id, node)
 
-        return self._split_internal(node_id, node)
-
-    # -----------------------------
-    # INSERT EN HOJA
-    # -----------------------------
-
-    def _insert_in_leaf(self, node, key, record):
-        i = 0
-        while i < len(node.keys) and node.keys[i] <= key:
-            i += 1
-
-        node.keys.insert(i, key)
-        node.records.insert(i, record)
-
-    # -----------------------------
-    # SPLIT LEAF
-    # -----------------------------
+    # -------------------------
+    # SPLIT
+    # -------------------------
 
     def _split_leaf(self, node_id, node):
         mid = len(node.keys) // 2
 
-        right = LeafNode()
+        left = Node(is_leaf=True)
+        right = Node(is_leaf=True)
+
+        left.keys = node.keys[:mid]
+        left.children = node.children[:mid]
+
         right.keys = node.keys[mid:]
-        right.records = node.records[mid:]
+        right.children = node.children[mid:]
 
-        node.keys = node.keys[:mid]
-        node.records = node.records[:mid]
+        right.next = node.next
 
-        new_id = self._new_leaf()
+        new_id = self.dm.allocate_page()
+        left.next = new_id
 
-        right.next_leaf = node.next_leaf
-        node.next_leaf = new_id
-
-        self._write_node(node_id, node)
+        self._write_node(node_id, left)
         self._write_node(new_id, right)
 
         return right.keys[0], new_id
 
-    # -----------------------------
-    # SPLIT INTERNAL
-    # -----------------------------
-
     def _split_internal(self, node_id, node):
         mid = len(node.keys) // 2
 
-        split_key = node.keys[mid]
+        promote = node.keys[mid]
 
-        right = InternalNode()
+        left = Node(is_leaf=False)
+        right = Node(is_leaf=False)
+
+        left.keys = node.keys[:mid]
+        left.children = node.children[:mid + 1]
+
         right.keys = node.keys[mid + 1:]
         right.children = node.children[mid + 1:]
 
-        node.keys = node.keys[:mid]
-        node.children = node.children[:mid + 1]
+        new_id = self.dm.allocate_page()
 
-        if len(node.children) != len(node.keys) + 1:
-            raise Exception("Error split izquierda")
-
-        if len(right.children) != len(right.keys) + 1:
-            raise Exception("Error split derecha")
-
-        new_id = self._new_internal()
-
-        self._write_node(node_id, node)
+        self._write_node(node_id, left)
         self._write_node(new_id, right)
 
-        return split_key, new_id
+        return promote, new_id
 
-    # -----------------------------
+    # -------------------------
+    # SEARCH
+    # -------------------------
+
+    def search(self, key):
+        node_id = self.root
+
+        while True:
+            node = self._read_node(node_id)
+
+            if node.is_leaf:
+                res = []
+                i = 0
+                while i < len(node.keys):
+                    if node.keys[i] == key:
+                        res.append(node.children[i])
+                    i += 1
+
+                # recorrer hojas siguientes
+                next_id = node.next
+                while next_id != -1:
+                    node = self._read_node(next_id)
+                    for i in range(len(node.keys)):
+                        if node.keys[i] == key:
+                            res.append(node.children[i])
+                        elif node.keys[i] > key:
+                            return res
+                    next_id = node.next
+
+                return res
+
+            else:
+                i = 0
+                while i < len(node.keys) and key > node.keys[i]:  # FIX CLAVE
+                    i += 1
+                node_id = node.children[i]
+
+    # -------------------------
+    # RANGE SEARCH
+    # -------------------------
+
+    def range_search(self, start, end):
+        node_id = self.root
+
+        while True:
+            node = self._read_node(node_id)
+
+            if node.is_leaf:
+                break
+
+            i = 0
+            while i < len(node.keys) and start > node.keys[i]:  # FIX CLAVE
+                i += 1
+            node_id = node.children[i]
+
+        res = []
+
+        while node_id != -1:
+            node = self._read_node(node_id)
+
+            for i in range(len(node.keys)):
+                k = node.keys[i]
+
+                if start <= k <= end:
+                    res.append(node.children[i])
+                elif k > end:
+                    return res
+
+            node_id = node.next
+
+        return res
+
+    # -------------------------
     # CLOSE
-    # -----------------------------
+    # -------------------------
 
     def close(self):
         self.dm.close()

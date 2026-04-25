@@ -39,160 +39,101 @@ IMPORTANTE:
 Todo el sistema (Heap, Hash, B+Tree, etc.) debe usar este módulo
 para acceder a disco.
 """
+import os
+
+PAGE_SIZE = 4096
+META_PAGE_ID = 0
+
+
 class DiskManager:
+    """
+    Maneja acceso a disco a nivel de páginas.
+    Página 0 = metadata:
+        bytes 0-4  -> total_pages
+        bytes 4-8  -> root_page_id (usado por B+ Tree)
+    """
+
     def __init__(self, file_path: str):
-        if not isinstance(file_path, str) or len(file_path.strip()) == 0:
-            raise ValueError("file_path debe ser un string válido")
-
         self.file_path = file_path
-
         new_file = not os.path.exists(file_path)
 
-        try:
-            self.file = open(file_path, "r+b" if not new_file else "w+b")
-        except Exception as e:
-            raise IOError(f"No se pudo abrir el archivo: {e}")
+        self.file = open(file_path, "r+b" if not new_file else "w+b")
 
         self.read_count = 0
         self.write_count = 0
 
         if new_file:
             self._init_meta_page()
-        else:
-            # validar metadata existente
-            total = self._get_total_pages()
-            if total < 1:
-                raise ValueError("Archivo corrupto: total_pages inválido")
 
     # -----------------------------
-    # META PAGE
+    # META
     # -----------------------------
-
     def _init_meta_page(self):
-        try:
-            data = bytearray(PAGE_SIZE)
-            data[0:4] = (1).to_bytes(4, 'big')  # solo metadata
+        data = bytearray(PAGE_SIZE)
+        data[0:4] = (1).to_bytes(4, 'big')  # total_pages = 1
+        data[4:8] = (0).to_bytes(4, 'big')  # root = 0
+        self.file.seek(0)
+        self.file.write(data)
+        self.file.flush()
 
-            self.file.seek(0)
-            self.file.write(data)
-            self.file.flush()
-        except Exception as e:
-            raise IOError(f"Error inicializando metadata: {e}")
+    def _get_total_pages(self):
+        self.file.seek(0)
+        return int.from_bytes(self.file.read(4), 'big')
 
-    def _get_total_pages(self) -> int:
-        try:
-            self.file.seek(0)
-            data = self.file.read(4)
-
-            if len(data) < 4:
-                raise ValueError("Metadata incompleta")
-
-            total = int.from_bytes(data, 'big')
-
-            if total < 1:
-                raise ValueError("total_pages inválido")
-
-            return total
-        except Exception as e:
-            raise IOError(f"Error leyendo metadata: {e}")
-
-    def _set_total_pages(self, value: int):
-        if value < 1:
-            raise ValueError("total_pages debe ser >= 1")
-
-        try:
-            self.file.seek(0)
-            self.file.write(value.to_bytes(4, 'big'))
-            self.file.flush()
-        except Exception as e:
-            raise IOError(f"Error escribiendo metadata: {e}")
+    def _set_total_pages(self, value):
+        self.file.seek(0)
+        self.file.write(value.to_bytes(4, 'big'))
+        self.file.flush()
 
     # -----------------------------
     # READ
     # -----------------------------
-
     def read_page(self, page_id: int) -> bytes:
-        if not isinstance(page_id, int) or page_id < 0:
-            raise ValueError("page_id debe ser un entero >= 0")
+        if page_id < 0:
+            raise ValueError("page_id inválido")
 
-        try:
-            offset = page_id * PAGE_SIZE
-            self.file.seek(offset)
+        offset = page_id * PAGE_SIZE
+        self.file.seek(offset)
 
-            data = self.file.read(PAGE_SIZE)
+        data = self.file.read(PAGE_SIZE)
 
-            if len(data) < PAGE_SIZE:
-                data += b'\x00' * (PAGE_SIZE - len(data))
+        if len(data) < PAGE_SIZE:
+            data += b'\x00' * (PAGE_SIZE - len(data))
 
-            self.read_count += 1
-            return data
-
-        except Exception as e:
-            raise IOError(f"Error leyendo página {page_id}: {e}")
+        self.read_count += 1
+        return data
 
     # -----------------------------
     # WRITE
     # -----------------------------
-
-    def write_page(self, page_id: int, data: bytes) -> None:
-        if not isinstance(page_id, int) or page_id < 0:
-            raise ValueError("page_id debe ser un entero >= 0")
-
-        if not isinstance(data, (bytes, bytearray)):
-            raise ValueError("data debe ser bytes o bytearray")
-
+    def write_page(self, page_id: int, data: bytes):
         if len(data) != PAGE_SIZE:
-            raise ValueError(f"La página debe tener exactamente {PAGE_SIZE} bytes")
+            raise ValueError("Página debe ser PAGE_SIZE")
 
-        try:
-            offset = page_id * PAGE_SIZE
-            self.file.seek(offset)
+        offset = page_id * PAGE_SIZE
+        self.file.seek(offset)
 
-            self.file.write(data)
-            self.file.flush()
+        self.file.write(data)
+        self.file.flush()
 
-            self.write_count += 1
-
-        except Exception as e:
-            raise IOError(f"Error escribiendo página {page_id}: {e}")
+        self.write_count += 1
 
     # -----------------------------
     # ALLOCATE
     # -----------------------------
+    def allocate_page(self):
+        total = self._get_total_pages()
+        new_page_id = total
 
-    def allocate_page(self) -> int:
-        try:
-            total_pages = self._get_total_pages()
-            new_page_id = total_pages
+        self.write_page(new_page_id, b'\x00' * PAGE_SIZE)
+        self._set_total_pages(total + 1)
 
-            # escribir página vacía
-            self.write_page(new_page_id, b'\x00' * PAGE_SIZE)
-
-            # actualizar metadata
-            self._set_total_pages(total_pages + 1)
-
-            return new_page_id
-
-        except Exception as e:
-            raise IOError(f"Error asignando nueva página: {e}")
+        return new_page_id
 
     # -----------------------------
-    # STATS
-    # -----------------------------
-
-    def get_stats(self) -> dict:
-        return {
-            "reads": self.read_count,
-            "writes": self.write_count
-        }
+    def get_stats(self):
+        return {"reads": self.read_count, "writes": self.write_count}
 
     # -----------------------------
-    # CLOSE
-    # -----------------------------
-
     def close(self):
-        try:
-            if self.file and not self.file.closed:
-                self.file.close()
-        except Exception as e:
-            raise IOError(f"Error cerrando archivo: {e}")
+        self.file.close()
