@@ -17,11 +17,14 @@ class BPlusTree:
         self.key_extractor = key_extractor
         self.order = order
 
-        # root persistente simple (página 1 si existe)
+        # ✅ CACHE (IMPORTANTE)
+        self.cache = {}
+
+        # root
         if self.dm._get_total_pages() == 1:
             self.root = self._new_leaf()
         else:
-            self.root = 1  # asumimos root en página 1
+            self.root = 1
 
     # -------------------------
     # SERIALIZACIÓN
@@ -94,10 +97,17 @@ class BPlusTree:
     # -------------------------
 
     def _read_node(self, page_id):
+        if page_id in self.cache:
+            return self.cache[page_id]
+
         data = self.dm.read_page(page_id)
-        return self._deserialize(data)
+        node = self._deserialize(data)
+
+        self.cache[page_id] = node
+        return node
 
     def _write_node(self, page_id, node):
+        self.cache[page_id] = node
         self.dm.write_page(page_id, self._serialize(node))
 
     def _new_leaf(self):
