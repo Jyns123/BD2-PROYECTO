@@ -4,7 +4,41 @@ PAGE_SIZE = 4096
 META_PAGE_ID = 0
 
 """Hola chicos, ojo que la pagina 0 será solo metadata, ya el resto contendrá datos. ademas
-quise tener los try y except en caso de errores para debug"""
+quise tener los try y except en caso de errores para debug
+
+DISK MANAGER
+
+Este módulo maneja TODO el acceso a disco del sistema.
+Es la única capa que puede leer o escribir en el archivo.
+
+Qué hace:
+- Trabaja con páginas de tamaño fijo (4096 bytes).
+- Permite leer y escribir páginas usando page_id.
+- Asigna nuevas páginas (allocate_page).
+- Lleva conteo de accesos a disco (reads/writes).
+
+Cómo funciona:
+- Cada página está en: offset = page_id * PAGE_SIZE
+- La página 0 se usa como metadata (guarda total_pages).
+- No se carga el archivo completo en memoria.
+
+Qué garantiza:
+- Persistencia correcta en disco.
+- Acceso controlado y medible.
+- Independencia del sistema operativo.
+
+Qué NO hace:
+- No maneja registros (eso lo hace Page).
+- No reutiliza páginas eliminadas.
+- No tiene buffer ni caché.
+
+Uso típico:
+    read_page → modificar → write_page
+
+IMPORTANTE:
+Todo el sistema (Heap, Hash, B+Tree, etc.) debe usar este módulo
+para acceder a disco.
+"""
 class DiskManager:
     def __init__(self, file_path: str):
         if not isinstance(file_path, str) or len(file_path.strip()) == 0:
