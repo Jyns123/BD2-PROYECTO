@@ -535,7 +535,6 @@ class TestSequentialFile:
         # debe reflejar reads de main + overflow
         assert self.seq.dm.read_count > 0
 
-    # En test_all.py, reemplazar el test:
     def test_overflow_limit_trigger_rebuild(self):
         self.seq.overflow_limit = 5
         for k in range(5):        # FIX: exactamente 5 → dispara rebuild → count queda en 0
