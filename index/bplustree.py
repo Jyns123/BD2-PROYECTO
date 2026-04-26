@@ -6,8 +6,8 @@ class Node:
     def __init__(self, is_leaf):
         self.is_leaf = is_leaf
         self.keys = []
-        self.children = []   # hijos o registros
-        self.next = -1       # siguiente hoja
+        self.children = []
+        self.next = -1
 
 
 class BPlusTree:
@@ -16,15 +16,13 @@ class BPlusTree:
         self.record_size = record_size
         self.key_extractor = key_extractor
         self.order = order
-
-        # ✅ CACHE (IMPORTANTE)
         self.cache = {}
 
-        # root
         if self.dm._get_total_pages() == 1:
             self.root = self._new_leaf()
+            self.dm.set_root(self.root)      # persistir root inicial
         else:
-            self.root = 1
+            self.root = self.dm.get_root()   # leer root real desde metadata
 
     # -------------------------
     # SERIALIZACIÓN
@@ -32,21 +30,14 @@ class BPlusTree:
 
     def _serialize(self, node):
         data = bytearray(PAGE_SIZE)
-
-        # tipo nodo
         data[0] = 1 if node.is_leaf else 0
-
-        # cantidad claves
         data[1:5] = len(node.keys).to_bytes(4, 'big')
 
         offset = 5
-
-        # keys
         for k in node.keys:
             data[offset:offset+4] = int(k).to_bytes(4, 'big')
             offset += 4
 
-        # next (hojas)
         next_ptr = node.next if node.next >= 0 else 0
         data[offset:offset+4] = next_ptr.to_bytes(4, 'big')
         offset += 4
@@ -99,10 +90,8 @@ class BPlusTree:
     def _read_node(self, page_id):
         if page_id in self.cache:
             return self.cache[page_id]
-
         data = self.dm.read_page(page_id)
         node = self._deserialize(data)
-
         self.cache[page_id] = node
         return node
 
@@ -127,8 +116,8 @@ class BPlusTree:
     # -------------------------
 
     def insert(self, record):
+        self.cache.clear()                           # simular disco real
         key = self.key_extractor(record)
-
         split = self._insert_recursive(self.root, key, record)
 
         if split:
@@ -136,9 +125,10 @@ class BPlusTree:
             new_root.keys = [split[0]]
             new_root.children = [self.root, split[1]]
 
-            root_id = self._new_internal()
+            root_id = self.dm.allocate_page()
             self._write_node(root_id, new_root)
             self.root = root_id
+            self.dm.set_root(self.root)              # persistir nuevo root
 
     def _insert_recursive(self, node_id, key, record):
         node = self._read_node(node_id)
@@ -147,35 +137,30 @@ class BPlusTree:
             i = 0
             while i < len(node.keys) and node.keys[i] < key:
                 i += 1
-
             node.keys.insert(i, key)
             node.children.insert(i, record)
 
-            if len(node.keys) <= self.order:
+            if len(node.keys) < self.order:
                 self._write_node(node_id, node)
                 return None
-
             return self._split_leaf(node_id, node)
 
         else:
             i = 0
-            while i < len(node.keys) and key > node.keys[i]:  # FIX CLAVE
+            while i < len(node.keys) and key > node.keys[i]:
                 i += 1
-
             split = self._insert_recursive(node.children[i], key, record)
 
             if not split:
                 return None
 
             new_key, new_child = split
-
             node.keys.insert(i, new_key)
             node.children.insert(i + 1, new_child)
 
-            if len(node.keys) <= self.order:
+            if len(node.keys) < self.order:
                 self._write_node(node_id, node)
                 return None
-
             return self._split_internal(node_id, node)
 
     # -------------------------
@@ -190,10 +175,8 @@ class BPlusTree:
 
         left.keys = node.keys[:mid]
         left.children = node.children[:mid]
-
         right.keys = node.keys[mid:]
         right.children = node.children[mid:]
-
         right.next = node.next
 
         new_id = self.dm.allocate_page()
@@ -206,7 +189,6 @@ class BPlusTree:
 
     def _split_internal(self, node_id, node):
         mid = len(node.keys) // 2
-
         promote = node.keys[mid]
 
         left = Node(is_leaf=False)
@@ -214,7 +196,6 @@ class BPlusTree:
 
         left.keys = node.keys[:mid]
         left.children = node.children[:mid + 1]
-
         right.keys = node.keys[mid + 1:]
         right.children = node.children[mid + 1:]
 
@@ -230,6 +211,7 @@ class BPlusTree:
     # -------------------------
 
     def search(self, key):
+        self.cache.clear()                           # simular disco real
         node_id = self.root
 
         while True:
@@ -241,9 +223,10 @@ class BPlusTree:
                 while i < len(node.keys):
                     if node.keys[i] == key:
                         res.append(node.children[i])
+                    elif node.keys[i] > key:
+                        return res
                     i += 1
 
-                # recorrer hojas siguientes
                 next_id = node.next
                 while next_id != -1:
                     node = self._read_node(next_id)
@@ -258,7 +241,7 @@ class BPlusTree:
 
             else:
                 i = 0
-                while i < len(node.keys) and key > node.keys[i]:  # FIX CLAVE
+                while i < len(node.keys) and key > node.keys[i]:
                     i += 1
                 node_id = node.children[i]
 
@@ -267,32 +250,27 @@ class BPlusTree:
     # -------------------------
 
     def range_search(self, start, end):
+        self.cache.clear()                           # simular disco real
         node_id = self.root
 
         while True:
             node = self._read_node(node_id)
-
             if node.is_leaf:
                 break
-
             i = 0
-            while i < len(node.keys) and start > node.keys[i]:  # FIX CLAVE
+            while i < len(node.keys) and start > node.keys[i]:
                 i += 1
             node_id = node.children[i]
 
         res = []
-
         while node_id != -1:
             node = self._read_node(node_id)
-
             for i in range(len(node.keys)):
                 k = node.keys[i]
-
                 if start <= k <= end:
                     res.append(node.children[i])
                 elif k > end:
                     return res
-
             node_id = node.next
 
         return res

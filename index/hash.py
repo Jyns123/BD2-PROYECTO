@@ -1,24 +1,5 @@
-"""
-EXTENDIBLE HASHING
+# index/hash.py
 
-Qué hace:
-- Acceso casi O(1) por clave usando hashing.
-- Directorio en memoria → apunta a buckets en disco.
-- Buckets = páginas (Page).
-
-Cómo funciona:
-- hash(key) → bits → índice en directorio
-- Inserta en bucket correspondiente
-- Si bucket se llena → split
-- Si no alcanza → duplicar directorio (global depth)
-
-Qué NO hace:
-- No soporta range queries
-- Directorio no persistente (en esta versión)
-
-Importante:
-Optimiza búsquedas puntuales frente a Heap/Sequential.
-"""
 from storage.disk_manager import DiskManager
 from storage.page import Page
 
@@ -27,7 +8,6 @@ class ExtendibleHash:
     def __init__(self, file_path: str, record_size: int, key_extractor):
         if not callable(key_extractor):
             raise ValueError("key_extractor debe ser función")
-
         if record_size <= 0:
             raise ValueError("record_size inválido")
 
@@ -35,18 +15,22 @@ class ExtendibleHash:
         self.record_size = record_size
         self.key = key_extractor
 
-        # directorio en memoria
         self.global_depth = 1
         self.directory = []
+        self.local_depths = {}   # NUEVO: profundidad local por bucket
 
-        # crear 2 buckets iniciales
-        b0 = self.dm.allocate_page()
-        b1 = self.dm.allocate_page()
-
-        self._init_bucket(b0)
-        self._init_bucket(b1)
-
-        self.directory = [b0, b1]
+        # FIX: solo crear buckets si el archivo es nuevo
+        if self.dm._get_total_pages() == 1:
+            b0 = self.dm.allocate_page()
+            b1 = self.dm.allocate_page()
+            self._init_bucket(b0)
+            self._init_bucket(b1)
+            self.directory = [b0, b1]
+            self.local_depths[b0] = 1   # NUEVO
+            self.local_depths[b1] = 1   # NUEVO
+        else:
+            self.directory = [1, 2]
+            self.local_depths = {1: 1, 2: 1}
 
     # -----------------------------
     # BUCKET INIT
@@ -59,7 +43,7 @@ class ExtendibleHash:
     # HASH
     # -----------------------------
     def _hash(self, key):
-        return hash(key)
+        return hash(key) & 0x7FFFFFFF  # FIX: evitar negativos en Python
 
     def _get_index(self, key):
         mask = (1 << self.global_depth) - 1
@@ -74,8 +58,10 @@ class ExtendibleHash:
 
         key = self.key(record)
 
-        while True:
+        for _ in range(64):   # FIX: aumentar límite, splits profundos necesitan más iteraciones
             idx = self._get_index(key)
+            if idx >= len(self.directory):
+                idx = idx % len(self.directory)
             bucket_id = self.directory[idx]
 
             raw = self.dm.read_page(bucket_id)
@@ -86,81 +72,78 @@ class ExtendibleHash:
                 self.dm.write_page(bucket_id, page.to_bytes())
                 return
 
-            # bucket lleno → split
             self._split(bucket_id, idx)
+
+        raise RuntimeError("No se pudo insertar tras multiples splits")
 
     # -----------------------------
     # SPLIT
     # -----------------------------
     def _split(self, bucket_id, idx):
-        # duplicar directorio si hace falta
-        if self._need_double(idx):
+        local_d = self.local_depths.get(bucket_id, 1)
+
+        # FIX: si profundidad local == global → hay que duplicar directorio
+        if local_d >= self.global_depth:
             self._double_directory()
 
-        # nuevo bucket
         new_bucket = self.dm.allocate_page()
         self._init_bucket(new_bucket)
 
-        # redistribuir
-        self._redistribute(bucket_id, new_bucket)
+        new_local_d = local_d + 1
+        self.local_depths[bucket_id] = new_local_d
+        self.local_depths[new_bucket] = new_local_d
 
-        # actualizar punteros
-        self._update_directory(bucket_id, new_bucket)
-
-    def _need_double(self, idx):
-        # condición simple: todos los índices apuntan al mismo bucket
-        return self.directory.count(self.directory[idx]) == len(self.directory)
+        self._redistribute(bucket_id, new_bucket, new_local_d)
+        self._update_directory(bucket_id, new_bucket, new_local_d)
 
     def _double_directory(self):
         self.directory = self.directory * 2
         self.global_depth += 1
 
-    def _redistribute(self, old_bucket, new_bucket):
+    def _redistribute(self, old_bucket, new_bucket, local_depth):
         raw = self.dm.read_page(old_bucket)
         page = Page.from_bytes(raw, self.record_size)
-
         records = page.read_records()
 
-        # limpiar bucket viejo
-        page = Page(self.record_size)
+        old_page = Page(self.record_size)
+        new_page = Page(self.record_size)
+
+        mask = (1 << local_depth) - 1   # FIX: usar máscara basada en profundidad local
+        split_bit = 1 << (local_depth - 1)
 
         for r in records:
             key = self.key(r)
-            idx = self._get_index(key)
-
-            if idx % 2 == 0:
-                page.insert_record(r)
-            else:
-                raw_new = self.dm.read_page(new_bucket)
-                new_page = Page.from_bytes(raw_new, self.record_size)
+            if self._hash(key) & split_bit:
                 new_page.insert_record(r)
-                self.dm.write_page(new_bucket, new_page.to_bytes())
+            else:
+                old_page.insert_record(r)
 
-        self.dm.write_page(old_bucket, page.to_bytes())
+        self.dm.write_page(old_bucket, old_page.to_bytes())
+        self.dm.write_page(new_bucket, new_page.to_bytes())
 
-    def _update_directory(self, old_bucket, new_bucket):
+    def _update_directory(self, old_bucket, new_bucket, local_depth):
+        # FIX: actualizar entradas del directorio que apuntan al old bucket
+        # y cuyo índice tiene el split_bit activado
+        split_bit = 1 << (local_depth - 1)
         for i in range(len(self.directory)):
-            if self.directory[i] == old_bucket:
-                if i % 2 == 1:
-                    self.directory[i] = new_bucket
+            if self.directory[i] == old_bucket and (i & split_bit):
+                self.directory[i] = new_bucket
 
     # -----------------------------
     # SEARCH
     # -----------------------------
     def search(self, key_value):
         idx = self._get_index(key_value)
-        bucket_id = self.directory[idx]
 
+        # FIX: verificar que idx no esté fuera de rango
+        if idx >= len(self.directory):
+            return []
+
+        bucket_id = self.directory[idx]
         raw = self.dm.read_page(bucket_id)
         page = Page.from_bytes(raw, self.record_size)
 
-        results = []
-
-        for r in page.read_records():
-            if self.key(r) == key_value:
-                results.append(r)
-
-        return results
+        return [r for r in page.read_records() if self.key(r) == key_value]
 
     # -----------------------------
     # CLOSE

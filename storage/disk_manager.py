@@ -3,48 +3,6 @@ import os
 PAGE_SIZE = 4096
 META_PAGE_ID = 0
 
-"""Hola chicos, ojo que la pagina 0 será solo metadata, ya el resto contendrá datos. ademas
-quise tener los try y except en caso de errores para debug
-
-DISK MANAGER
-
-Este módulo maneja TODO el acceso a disco del sistema.
-Es la única capa que puede leer o escribir en el archivo.
-
-Qué hace:
-- Trabaja con páginas de tamaño fijo (4096 bytes).
-- Permite leer y escribir páginas usando page_id.
-- Asigna nuevas páginas (allocate_page).
-- Lleva conteo de accesos a disco (reads/writes).
-
-Cómo funciona:
-- Cada página está en: offset = page_id * PAGE_SIZE
-- La página 0 se usa como metadata (guarda total_pages).
-- No se carga el archivo completo en memoria.
-
-Qué garantiza:
-- Persistencia correcta en disco.
-- Acceso controlado y medible.
-- Independencia del sistema operativo.
-
-Qué NO hace:
-- No maneja registros (eso lo hace Page).
-- No reutiliza páginas eliminadas.
-- No tiene buffer ni caché.
-
-Uso típico:
-    read_page → modificar → write_page
-
-IMPORTANTE:
-Todo el sistema (Heap, Hash, B+Tree, etc.) debe usar este módulo
-para acceder a disco.
-"""
-import os
-
-PAGE_SIZE = 4096
-META_PAGE_ID = 0
-
-
 class DiskManager:
     """
     Maneja acceso a disco a nivel de páginas.
@@ -85,6 +43,15 @@ class DiskManager:
         self.file.write(value.to_bytes(4, 'big'))
         self.file.flush()
 
+    def get_root(self):
+        self.file.seek(4)
+        return int.from_bytes(self.file.read(4), 'big')
+
+    def set_root(self, root_id):
+        self.file.seek(4)
+        self.file.write(root_id.to_bytes(4, 'big'))
+        self.file.flush()
+
     # -----------------------------
     # READ
     # -----------------------------
@@ -94,7 +61,6 @@ class DiskManager:
 
         offset = page_id * PAGE_SIZE
         self.file.seek(offset)
-
         data = self.file.read(PAGE_SIZE)
 
         if len(data) < PAGE_SIZE:
@@ -112,7 +78,6 @@ class DiskManager:
 
         offset = page_id * PAGE_SIZE
         self.file.seek(offset)
-
         self.file.write(data)
         self.file.flush()
 
@@ -131,8 +96,14 @@ class DiskManager:
         return new_page_id
 
     # -----------------------------
+    # STATS
+    # -----------------------------
     def get_stats(self):
         return {"reads": self.read_count, "writes": self.write_count}
+
+    def reset_stats(self):
+        self.read_count = 0
+        self.write_count = 0
 
     # -----------------------------
     def close(self):

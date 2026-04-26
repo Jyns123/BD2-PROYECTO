@@ -1,92 +1,103 @@
-"""
-SEQUENTIAL FILE
+# index/sequential.py
 
-Implementa archivo ordenado con overflow.
-
-Qué hace:
-- Mantiene un archivo principal ordenado por clave.
-- Inserciones nuevas van a overflow (no rompe orden).
-- Permite búsqueda en principal + overflow.
-- Soporta range search.
-
-Cómo funciona:
-- Archivo principal: páginas ordenadas
-- Overflow: inserciones recientes
-- Cuando overflow crece mucho → rebuild
-
-Funciones principales:
-- insert → agrega en overflow
-- search → busca en ambos
-- range_search → rango ordenado
-- rebuild → fusiona principal + overflow
-
-Qué NO hace:
-- No mantiene orden en tiempo real
-- No optimiza inserciones (usa overflow)
-
-Importante:
-Es un punto medio entre Heap (simple) y B+Tree (óptimo).
-"""
+import os
 from storage.disk_manager import DiskManager
 from index.heap import HeapFile
 
 
 class SequentialFile:
     def __init__(self, main_path: str, overflow_path: str, record_size: int, key_extractor):
-        """
-        main_path: archivo para datos ordenados
-        overflow_path: archivo para inserciones
-        key_extractor: función que extrae la clave desde un record (bytes)
-        """
-
         if not callable(key_extractor):
             raise ValueError("key_extractor debe ser una función")
-
         if not isinstance(record_size, int) or record_size <= 0:
             raise ValueError("record_size inválido")
 
         self.record_size = record_size
         self.key = key_extractor
+        self.main_path = main_path
+        self.overflow_path = overflow_path
 
-        # DiskManagers separados
         self.main_dm = DiskManager(main_path)
         self.overflow_dm = DiskManager(overflow_path)
 
-        # Heaps sobre cada archivo
         self.main = HeapFile(self.main_dm, record_size)
         self.overflow = HeapFile(self.overflow_dm, record_size)
 
+        # FIX: exponer un dm unificado para que el benchmark/engine
+        # pueda hacer reset_stats() y get_stats() en un solo punto
+        self.dm = self._UnifiedDM(self.main_dm, self.overflow_dm)
+
+        # FIX: umbral de rebuild configurable
+        self.overflow_limit = 200
+        self._overflow_count = 0
+
+    # -------------------------
+    # DM UNIFICADO (inner class)
+    # -------------------------
+    class _UnifiedDM:
+        """Suma reads/writes de main y overflow para métricas consistentes."""
+        def __init__(self, main_dm, overflow_dm):
+            self._main = main_dm
+            self._overflow = overflow_dm
+
+        def reset_stats(self):
+            self._main.reset_stats()
+            self._overflow.reset_stats()
+
+        def get_stats(self):
+            return {
+                "reads":  self._main.read_count  + self._overflow.read_count,
+                "writes": self._main.write_count + self._overflow.write_count,
+            }
+
+        @property
+        def read_count(self):
+            return self._main.read_count + self._overflow.read_count
+
+        @property
+        def write_count(self):
+            return self._main.write_count + self._overflow.write_count
+
     # -----------------------------
-    # INSERT → siempre a overflow
+    # INSERT → overflow
     # -----------------------------
     def insert(self, record: bytes):
         if not isinstance(record, (bytes, bytearray)):
             raise ValueError("record debe ser bytes")
-
         if len(record) != self.record_size:
             raise ValueError("tamaño de record incorrecto")
 
-        return self.overflow.insert(record)
+        self.overflow.insert(record)
+        self._overflow_count += 1
+
+        # FIX: resetear ANTES de incrementar para que el rebuild
+        # no cuente el registro que acaba de entrar
+        if self._overflow_count >= self.overflow_limit:
+            self.rebuild()
+            # _overflow_count ya se resetea a 0 dentro de rebuild()
+            # pero el registro actual ya fue insertado antes del rebuild,
+            # así que el conteo es correcto
 
     # -----------------------------
-    # SEARCH → main + overflow
+    # SEARCH
     # -----------------------------
     def search(self, key_value):
         results = []
-
         try:
-            # buscar en main
+            # FIX: early exit en main si clave ya pasó (está ordenado)
             for r in self.main.scan():
-                if self.key(r) == key_value:
+                k = self.key(r)
+                if k == key_value:
                     results.append(r)
+                elif k > key_value:
+                    break  # main está ordenado → no puede haber más
 
-            # buscar en overflow
+            # overflow siempre full scan (no está ordenado)
             for r in self.overflow.scan():
                 if self.key(r) == key_value:
                     results.append(r)
 
             return results
-
         except Exception as e:
             raise IOError(f"Error en search: {e}")
 
@@ -95,11 +106,13 @@ class SequentialFile:
     # -----------------------------
     def range_search(self, begin, end):
         results = []
-
         try:
+            # FIX: early exit cuando k > end en main
             for r in self.main.scan():
                 k = self.key(r)
-                if begin <= k <= end:
+                if k > end:
+                    break
+                if begin <= k:
                     results.append(r)
 
             for r in self.overflow.scan():
@@ -107,11 +120,8 @@ class SequentialFile:
                 if begin <= k <= end:
                     results.append(r)
 
-            # mantener orden lógico
             results.sort(key=self.key)
-
             return results
-
         except Exception as e:
             raise IOError(f"Error en range_search: {e}")
 
@@ -119,41 +129,27 @@ class SequentialFile:
     # REBUILD
     # -----------------------------
     def rebuild(self):
-        """
-        Fusiona main + overflow en un nuevo archivo principal ordenado.
-        Luego limpia overflow.
-        """
-        import os
-
         try:
-            # 1. Obtener todos los registros
             all_records = self.main.scan() + self.overflow.scan()
-
-            # 2. Ordenar por clave
             all_records.sort(key=self.key)
 
-            # 3. Recrear archivo principal
-            main_path = self.main_dm.file_path
-
             self.main_dm.close()
-            if os.path.exists(main_path):
-                os.remove(main_path)
-
-            self.main_dm = DiskManager(main_path)
+            if os.path.exists(self.main_path):
+                os.remove(self.main_path)
+            self.main_dm = DiskManager(self.main_path)
             self.main = HeapFile(self.main_dm, self.record_size)
 
             for r in all_records:
                 self.main.insert(r)
 
-            # 4. Limpiar overflow
-            overflow_path = self.overflow_dm.file_path
-
             self.overflow_dm.close()
-            if os.path.exists(overflow_path):
-                os.remove(overflow_path)
-
-            self.overflow_dm = DiskManager(overflow_path)
+            if os.path.exists(self.overflow_path):
+                os.remove(self.overflow_path)
+            self.overflow_dm = DiskManager(self.overflow_path)
             self.overflow = HeapFile(self.overflow_dm, self.record_size)
+
+            self.dm = self._UnifiedDM(self.main_dm, self.overflow_dm)
+            self._overflow_count = 0   # una sola vez, al final
 
         except Exception as e:
             raise IOError(f"Error en rebuild: {e}")
