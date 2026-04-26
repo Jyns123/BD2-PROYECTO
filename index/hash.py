@@ -43,7 +43,10 @@ class ExtendibleHash:
     # HASH
     # -----------------------------
     def _hash(self, key):
-        return hash(key) & 0x7FFFFFFF  # FIX: evitar negativos en Python
+        # ✅ hash determinista para enteros y strings
+        if isinstance(key, int):
+            return key & 0x7FFFFFFF
+        return int.from_bytes(str(key).encode(), 'big') & 0x7FFFFFFF
 
     def _get_index(self, key):
         mask = (1 << self.global_depth) - 1
