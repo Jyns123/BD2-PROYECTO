@@ -1,484 +1,216 @@
-# Anexo Técnico: Definición de Interfaces y Responsabilidades por Módulo
+# Simulador de Gestor de Base de Datos
+### Base de Datos 2 · UTEC · Ciclo 2026-1
 
-El presente anexo define, de manera precisa, las responsabilidades de cada componente del sistema, así como las funciones principales que deberán implementarse. El objetivo es establecer una base común para el desarrollo, evitando ambigüedades en la implementación.
-
----
-
-# I. Módulo `storage/`
-
-Este módulo abstrae completamente el acceso a disco. Ningún otro componente debe interactuar directamente con archivos.
-
-## I.I Archivo: `disk_manager.py`
-
-### Responsabilidad
-
-Gestionar lectura/escritura de páginas en disco y contabilizar accesos.
-
-### Funciones
-
-#### `read_page(page_id: int) -> bytes`
-
-* **Entrada:**
-
-  * `page_id`: identificador de la página a leer
-* **Salida:**
-
-  * `bytes` de tamaño `PAGE_SIZE`
-* **Descripción:**
-
-  * Posiciona el puntero en `page_id * PAGE_SIZE`
-  * Lee exactamente una página
-  * Incrementa contador de lecturas
+Sistema de indexación sobre memoria secundaria que implementa desde cero las estructuras clásicas de organización de archivos, un parser SQL, simulador de concurrencia e interfaz gráfica. :D
 
 ---
 
-#### `write_page(page_id: int, data: bytes) -> None`
+## Integrantes
 
-* **Entrada:**
-
-  * `page_id`: identificador de la página
-  * `data`: bytes de tamaño `PAGE_SIZE`
-* **Salida:** ninguna
-* **Descripción:**
-
-  * Escribe la página en la posición correspondiente
-  * Incrementa contador de escrituras
+| Nombre | GitHub |
+|--------|--------|
+| Jyns Ordóñez | — |
+| — | — |
+| — | — |
 
 ---
 
-#### `allocate_page() -> int`
+## Estructuras implementadas
 
-* **Salida:**
-
-  * nuevo `page_id`
-* **Descripción:**
-
-  * Retorna la siguiente página libre
-  * No inicializa contenido necesariamente
-
----
-
-#### `get_stats() -> dict`
-
-* **Salida:**
-
-  * `{reads: int, writes: int}`
-* **Descripción:**
-
-  * Retorna métricas acumuladas
+| Estructura | insert | search | range_search | remove |
+|------------|--------|--------|--------------|--------|
+| Sequential File | O(1) aux / O(n) rebuild | O(log n) + O(n) overflow | O(log n + k) | — |
+| Extendible Hashing | O(1) amortizado | O(1) | No soportado | — |
+| B+ Tree | O(log n) | O(log n) | O(log n + k) | — |
+| R-Tree | — | — | O(log n + k) | — |
 
 ---
 
-## I.II Archivo: `page.py`
+## Requisitos
 
-### Responsabilidad
+```bash
+Python 3.10+
+```
 
-Representar una página en memoria y manejar registros dentro de ella.
+Sin dependencias externas para el backend. Para el benchmark y reporte:
 
-### Atributos esperados
+```bash
+pip install matplotlib numpy
+```
 
-* `data: bytearray`
-* `free_space_offset: int`
 
----
+## Instalación
 
-### Funciones
 
-#### `insert_record(record: bytes) -> bool`
 
-* **Entrada:**
+Con Docker (recomendado):
 
-  * `record`: datos serializados
-* **Salida:**
 
-  * `True` si se insertó, `False` si no hay espacio
-* **Descripción:**
+Sin Docker:
 
-  * Inserta el registro si hay espacio disponible
 
 ---
 
-#### `read_records() -> list`
-
-* **Salida:**
-
-  * lista de registros
-* **Descripción:**
-
-  * Itera sobre la página y reconstruye registros
-
----
-
-#### `has_space(size: int) -> bool`
-
-* **Entrada:**
-
-  * tamaño del registro
-* **Salida:**
-
-  * booleano
-
----
-
-# II. Módulo `index/`
-
-Contiene las estructuras de organización de datos sobre disco.
-
----
-
-## II.I Archivo: `heap.py`
-
-### Responsabilidad
-
-Implementar almacenamiento sin orden.
-
----
-
-### Funciones
-
-#### `insert(record: bytes) -> None`
-
-* Busca una página con espacio
-* Si no existe, crea nueva página
-
----
-
-#### `search(predicate) -> list`
-
-* **Entrada:**
-
-  * función o condición
-* **Salida:**
-
-  * registros que cumplen condición
-* **Descripción:**
-
-  * Scan completo
-
----
-
-#### `delete(predicate) -> int`
-
-* **Salida:**
-
-  * cantidad de registros eliminados
-
----
-
----
-
-## II.II Archivo: `sequential.py`
-
-### Responsabilidad
-
-Archivo ordenado con overflow.
-
----
-
-### Funciones
-
-#### `insert(key, record: bytes)`
-
-* Inserta en overflow
-* Mantiene archivo principal intacto
-
----
-
-#### `search(key) -> record`
-
-* Búsqueda binaria en archivo principal
-* Búsqueda lineal en overflow
-
----
-
-#### `range_search(begin, end) -> list`
-
-* Iteración ordenada
-
----
-
-#### `rebuild() -> None`
-
-* Merge entre archivo principal y overflow
-* Reorganiza datos
-
----
-
----
-
-## II.III Archivo: `hash.py`
-
-### Responsabilidad
-
-Extendible hashing.
-
----
-
-### Estructuras internas
-
-* `directory: list[int]`
-* `global_depth: int`
-
----
-
-### Funciones
-
-#### `hash(key) -> int`
-
-* Función hash base
-
----
-
-#### `insert(key, record)`
-
-* Determina bucket
-* Maneja split si overflow
-
----
-
-#### `search(key)`
-
-* Acceso directo a bucket
-
----
-
-#### `split(bucket_id)`
-
-* Duplica entradas de directorio si necesario
-
----
-
----
-
-## II.IV Archivo: `bplustree.py`
-
-### Responsabilidad
-
-Árbol B+ persistente en páginas.
-
----
-
-### Estructuras
-
-* Nodo interno
-* Nodo hoja
-* Punteros a páginas
-
----
-
-### Funciones
-
-#### `search(key)`
-
-* Navega desde raíz hasta hoja
-
----
-
-#### `insert(key, record)`
-
-* Inserta en hoja
-* Maneja split si es necesario
-
----
-
-#### `range_search(begin, end)`
-
-* Recorre hojas enlazadas
-
----
-
-#### `split(node)`
-
-* Divide nodo en dos
-* Propaga clave al padre
-
----
-
----
-
-## II.V Archivo: `rtree.py`
-
-### Responsabilidad
-
-Indexación espacial.
-
----
-
-### Funciones
-
-#### `range_search(point, radius)`
-
-* Retorna objetos dentro del rango
-
----
-
-#### `knn(point, k)`
-
-* Retorna k vecinos más cercanos
-
----
-
----
-
-# III. Módulo `parser/`
-
----
-
-## III.I Archivo: `tokenizer.py`
-
-### Función
-
-#### `tokenize(query: str) -> list`
-
-* Divide la consulta en tokens
-
----
-
-## III.II Archivo: `parser.py`
-
-### Función
-
-#### `parse(tokens: list) -> dict`
-
-* **Salida:**
-
-  * representación estructurada:
-
-```json
-{
-  "type": "SELECT",
-  "table": "students",
-  "condition": {...}
-}
+## Estructura del proyecto
+
+```
+BD2-PROYECTO/
+│
+├── storage/
+│   ├── disk_manager.py     # Acceso a disco por páginas (PAGE_SIZE = 4096)
+│   └── page.py             # Manejo de registros dentro de una página
+│
+├── index/
+│   ├── heap.py             # Heap File (sin orden, base de Sequential)
+│   ├── sequential.py       # Archivo ordenado con overflow
+│   ├── hash.py             # Extendible Hashing
+│   ├── bplustree.py        # B+ Tree persistente
+│   └── rtree.py            # R-Tree espacial
+│
+├── parser/
+│   ├── tokenizer.py        # Tokenizador SQL
+│   └── parser.py           # Parser → dict estructurado
+│
+├── engine/
+│   ├── engine.py           # Coordinador de tablas e índices
+│   └── executor.py         # Despacho de queries
+│
+├── concurrency/
+│   └── simulator.py        # Simulador de transacciones concurrentes
+│
+├── frontend/               # Interfaz gráfica o web
+│
+├── utils/
+│   ├── csv_loader.py       # Carga de datos desde CSV
+│   ├── metrics.py          # MetricsLogger — captura I/O y tiempo
+│   ├── benchmark.py        # Experimentos automáticos n=1k/10k/100k
+│   └── report_generator.py # Genera informe Markdown + gráficos PNG
+│
+├── test_all.py             # Suite de 72 tests
+├── main.py                 # Punto de entrada
+├── docker-compose.yml
+└── README.md
 ```
 
 ---
 
----
+## Uso rápido
 
-# IV. Módulo `engine/`
+### Desde Python
 
----
+```python
+from index.bplustree import BPlusTree
+import struct
 
-## IV.I Archivo: `executor.py`
+RECORD_SIZE = 40
 
-### Función principal
+def make_record(key):
+    return struct.pack(">I", key) + b"\x00" * (RECORD_SIZE - 4)
 
-#### `execute(query_dict: dict)`
+def key_extractor(record):
+    return struct.unpack(">I", record[:4])[0]
 
-* Recibe salida del parser
-* Llama al índice correspondiente
+tree = BPlusTree("students.db", RECORD_SIZE, key_extractor, order=50)
+tree.insert(make_record(101))
+results = tree.search(101)
+results = tree.range_search(100, 200)
+tree.close()
+```
 
----
+### Con SQL
 
-### Funciones auxiliares
+```sql
+CREATE TABLE students (id INT INDEX bplustree) FROM FILE 'data/students.csv';
 
-#### `handle_select(...)`
-
-#### `handle_insert(...)`
-
-#### `handle_delete(...)`
-
----
-
----
-
-# V. Módulo `concurrency/`
-
----
-
-## V.I Archivo: `simulator.py`
-
-### Funciones
-
-#### `run_transaction(operations: list)`
-
-* Ejecuta operaciones secuencialmente
+SELECT * FROM students WHERE id = 101;
+SELECT * FROM students WHERE id BETWEEN 100 AND 200;
+INSERT INTO students VALUES (101, 'Ana', 20);
+DELETE FROM students WHERE id = 101;
+```
 
 ---
 
-#### `run_concurrent(transactions: list)`
+## Tests
 
-* Ejecuta múltiples transacciones
+```bash
+# Con pytest
+python -m pytest test_all.py -v
 
----
+# Sin pytest (compatible Windows)
+python test_all.py
 
-#### `log_operation(op)`
+# Solo una suite
+python -m pytest test_all.py::TestBPlusTree -v
+```
 
-* Registra orden de ejecución
+Resultado esperado: **72/72 tests pasando**.
 
----
-
----
-
-# VI. Módulo `frontend/`
-
-### Responsabilidad
-
-Interfaz de interacción con el usuario.
-
----
-
-### Funciones esperadas
-
-* Envío de consultas al backend
-* Renderizado de resultados
-* Visualización de métricas
+| Suite | Tests |
+|-------|-------|
+| TestDiskManager | 12 |
+| TestHeapFile | 8 |
+| TestBPlusTree | 17 |
+| TestExtendibleHash | 8 |
+| TestSequentialFile | 10 |
+| TestEngine | 12 |
+| TestMetricsLogger | 5 |
 
 ---
 
----
+## Experimentos y reporte
 
-# VII. Módulo `utils/`
+```bash
+# 1. Correr benchmark (genera utils/experiment_log.json)
+python -m utils.benchmark
 
----
+# 2. Generar informe con gráficos
+python -m utils.report_generator
 
-## VII.I `csv_loader.py`
+# Resultado: informe_experimental.md + graficos/
+```
 
-#### `load_csv(path: str) -> list`
-
-* Convierte CSV a registros
-
----
-
-## VII.II `metrics.py`
-
-#### `measure_time(func)`
-
-* Wrapper para medir tiempo
+El benchmark mide **accesos a disco** (páginas leídas + escritas) y **tiempo en ms** para insert, search y range_search con n = 1 000, 10 000 y 100 000 registros en cada estructura.
 
 ---
 
----
+## Métricas por operación
 
-# VIII. Archivo `main.py`
+Cada operación reporta:
 
-### Responsabilidad
+```python
+{
+  "reads":  4,      # páginas leídas
+  "writes": 2,      # páginas escritas
+  "time_ms": 0.31   # tiempo de reloj
+}
+```
 
-Punto de entrada del sistema.
-
----
-
-### Funciones
-
-#### `main()`
-
-* Inicializa módulos
-* Loop de ejecución
-* Conecta parser + engine + frontend
+El Engine resetea los contadores antes de cada operación para que las métricas sean por operación y no acumuladas.
 
 ---
 
+## Decisiones de diseño
+
+**Página 0 como metadata** — Los bytes 0-3 guardan `total_pages` y los bytes 4-7 guardan `root_page_id` del B+ Tree. Sin esto, al reabrir el archivo la raíz apuntaría a la página 1 hardcodeada, que puede ser incorrecta tras múltiples inserciones.
+
+**Cache limpiable en B+ Tree** — El cache en memoria se limpia al inicio de cada operación medida (`cache.clear()`) para simular accesos reales a disco y obtener métricas válidas. En producción el cache puede mantenerse activo para mejor rendimiento.
+
+**_UnifiedDM en SequentialFile** — Como Sequential usa dos archivos (main + overflow), se expone un DiskManager virtual que suma los contadores de ambos, manteniendo la interfaz uniforme que espera el Engine.
+
+**Profundidades locales en ExtendibleHash** — El directorio clásico de Extendible Hashing requiere conocer la profundidad local de cada bucket para decidir si duplicar el directorio global o solo redirigir punteros. Sin este atributo los splits son incorrectos.
+
 ---
 
-# IX. Consideraciones Generales
+## Docker
 
-* Todas las estructuras deben operar sobre páginas.
-* Ninguna estructura debe acceder directamente a archivos.
-* Las funciones deben ser independientes y testeables.
-* Se prioriza claridad en implementación sobre optimización extrema.
-* Toda operación debe reflejar su costo en accesos a disco.
+```bash
+docker compose up --build
+```
+
+El `docker-compose.yml` levanta el backend y el frontend en contenedores separados con volúmenes para persistencia de los archivos `.db`.
 
 ---
 
+## Licencia
 
+Proyecto académico — UTEC 2026-1.
