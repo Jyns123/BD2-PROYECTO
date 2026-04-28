@@ -8,6 +8,8 @@ Suite completa de tests para:
   - ExtendibleHash
   - SequentialFile
   - Engine
+  - MetricsLogger
+  - RTree
 
 Ejecutar:
     python -m pytest test_all.py -v
@@ -15,6 +17,7 @@ Ejecutar:
 """
 
 import os
+import math
 import struct
 import tempfile
 import pytest
@@ -23,7 +26,8 @@ import pytest
 # HELPERS COMPARTIDOS
 # -------------------------------------------------------
 
-RECORD_SIZE = 40  # 4 bytes key + 36 bytes padding
+RECORD_SIZE    = 40   # 4 bytes key + 36 bytes padding
+RECORD_SIZE_RT = 12   # 4 bytes id + 4 bytes x + 4 bytes y (RTree)
 
 def make_record(key: int) -> bytes:
     return struct.pack(">I", key) + b"\x00" * (RECORD_SIZE - 4)
@@ -31,22 +35,26 @@ def make_record(key: int) -> bytes:
 def key_extractor(record: bytes) -> int:
     return struct.unpack(">I", record[:4])[0]
 
+def make_spatial_record(id_: int, x: float, y: float) -> bytes:
+    return struct.pack(">iff", id_, x, y)
+
+def point_extractor(record: bytes):
+    _, x, y = struct.unpack(">iff", record)
+    return float(x), float(y)
+
+def id_extractor(record: bytes) -> int:
+    return struct.unpack(">i", record[:4])[0]
+
 def tmp_path(suffix=".db"):
     fd, path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
     os.remove(path)
     return path
 
-def tmp_path_existing(suffix=".db"):
-    """Crea un archivo temporal que sí existe (para DiskManager en modo r+b)."""
-    fd, path = tempfile.mkstemp(suffix=suffix)
-    os.close(fd)
-    return path
 
-
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # 1. DISK MANAGER
-# ═══════════════════════════════════════════════════════
+# =======================================================
 
 class TestDiskManager:
     def setup_method(self):
@@ -63,20 +71,15 @@ class TestDiskManager:
         return self.DiskManager(self.path)
 
     def test_crea_archivo_nuevo(self):
-        dm = self._make_dm()
-        assert os.path.exists(self.path)
-        dm.close()
+        dm = self._make_dm(); assert os.path.exists(self.path); dm.close()
 
     def test_total_pages_inicial_es_1(self):
-        dm = self._make_dm()
-        assert dm._get_total_pages() == 1
-        dm.close()
+        dm = self._make_dm(); assert dm._get_total_pages() == 1; dm.close()
 
     def test_allocate_incrementa_pages(self):
         dm = self._make_dm()
         pid = dm.allocate_page()
-        assert pid == 1
-        assert dm._get_total_pages() == 2
+        assert pid == 1 and dm._get_total_pages() == 2
         dm.close()
 
     def test_write_y_read_pagina(self):
@@ -84,8 +87,7 @@ class TestDiskManager:
         pid = dm.allocate_page()
         data = b"A" * self.PAGE_SIZE
         dm.write_page(pid, data)
-        result = dm.read_page(pid)
-        assert result == data
+        assert dm.read_page(pid) == data
         dm.close()
 
     def test_write_pagina_tamaño_incorrecto(self):
@@ -106,61 +108,44 @@ class TestDiskManager:
         pid = dm.allocate_page()
         dm.write_page(pid, b"\x00" * self.PAGE_SIZE)
         dm.read_page(pid)
-        # allocate_page hace 1 write interno + 1 write de set_total_pages
-        assert dm.read_count >= 1
-        assert dm.write_count >= 1
+        assert dm.read_count >= 1 and dm.write_count >= 1
         dm.close()
 
     def test_reset_stats(self):
         dm = self._make_dm()
-        pid = dm.allocate_page()
-        dm.read_page(pid)
-        dm.reset_stats()
-        assert dm.read_count == 0
-        assert dm.write_count == 0
+        pid = dm.allocate_page(); dm.read_page(pid); dm.reset_stats()
+        assert dm.read_count == 0 and dm.write_count == 0
         dm.close()
 
     def test_get_stats(self):
         dm = self._make_dm()
-        pid = dm.allocate_page()
-        dm.reset_stats()
-        dm.read_page(pid)
+        pid = dm.allocate_page(); dm.reset_stats(); dm.read_page(pid)
         stats = dm.get_stats()
-        assert "reads" in stats
-        assert "writes" in stats
-        assert stats["reads"] == 1
+        assert stats["reads"] == 1 and "writes" in stats
         dm.close()
 
     def test_set_y_get_root(self):
-        dm = self._make_dm()
-        dm.set_root(42)
-        assert dm.get_root() == 42
-        dm.close()
+        dm = self._make_dm(); dm.set_root(42); assert dm.get_root() == 42; dm.close()
 
     def test_root_persiste_entre_aperturas(self):
-        dm = self._make_dm()
-        dm.set_root(7)
-        dm.close()
+        dm = self._make_dm(); dm.set_root(7); dm.close()
         dm2 = self.DiskManager(self.path)
-        assert dm2.get_root() == 7
-        dm2.close()
+        assert dm2.get_root() == 7; dm2.close()
 
     def test_multiples_paginas(self):
         dm = self._make_dm()
         pids = [dm.allocate_page() for _ in range(5)]
         assert pids == [1, 2, 3, 4, 5]
         for pid in pids:
-            data = struct.pack(">I", pid) + b"\x00" * (self.PAGE_SIZE - 4)
-            dm.write_page(pid, data)
+            dm.write_page(pid, struct.pack(">I", pid) + b"\x00" * (self.PAGE_SIZE - 4))
         for pid in pids:
-            result = dm.read_page(pid)
-            assert struct.unpack(">I", result[:4])[0] == pid
+            assert struct.unpack(">I", dm.read_page(pid)[:4])[0] == pid
         dm.close()
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # 2. HEAP FILE
-# ═══════════════════════════════════════════════════════
+# =======================================================
 
 class TestHeapFile:
     def setup_method(self):
@@ -172,57 +157,42 @@ class TestHeapFile:
 
     def teardown_method(self):
         self.dm.close()
-        if os.path.exists(self.path):
-            os.remove(self.path)
+        if os.path.exists(self.path): os.remove(self.path)
 
     def test_insert_y_scan_un_registro(self):
-        rec = make_record(1)
-        self.heap.insert(rec)
-        results = self.heap.scan()
-        assert rec in results
+        rec = make_record(1); self.heap.insert(rec)
+        assert rec in self.heap.scan()
 
     def test_insert_multiples_y_scan(self):
-        records = [make_record(i) for i in range(10)]
-        for r in records:
-            self.heap.insert(r)
-        results = self.heap.scan()
-        assert len(results) == 10
+        for i in range(10): self.heap.insert(make_record(i))
+        assert len(self.heap.scan()) == 10
 
     def test_scan_vacio(self):
         assert self.heap.scan() == []
 
     def test_search_con_predicate(self):
-        for i in range(5):
-            self.heap.insert(make_record(i))
+        for i in range(5): self.heap.insert(make_record(i))
         results = self.heap.search(lambda r: key_extractor(r) == 3)
-        assert len(results) == 1
-        assert key_extractor(results[0]) == 3
+        assert len(results) == 1 and key_extractor(results[0]) == 3
 
     def test_search_sin_resultados(self):
         self.heap.insert(make_record(1))
-        results = self.heap.search(lambda r: key_extractor(r) == 99)
-        assert results == []
+        assert self.heap.search(lambda r: key_extractor(r) == 99) == []
 
     def test_insert_record_tamaño_invalido(self):
-        with pytest.raises((ValueError, IOError)):
-            self.heap.insert(b"corto")
+        with pytest.raises((ValueError, IOError)): self.heap.insert(b"corto")
 
     def test_insert_record_no_bytes(self):
-        with pytest.raises((ValueError, IOError)):
-            self.heap.insert("no es bytes")
+        with pytest.raises((ValueError, IOError)): self.heap.insert("no es bytes")
 
     def test_muchos_inserts_llenan_paginas(self):
-        # insertar suficientes registros para usar >1 página
-        n = 200
-        for i in range(n):
-            self.heap.insert(make_record(i))
-        results = self.heap.scan()
-        assert len(results) == n
+        for i in range(200): self.heap.insert(make_record(i))
+        assert len(self.heap.scan()) == 200
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # 3. B+ TREE
-# ═══════════════════════════════════════════════════════
+# =======================================================
 
 class TestBPlusTree:
     def setup_method(self):
@@ -232,148 +202,98 @@ class TestBPlusTree:
 
     def teardown_method(self):
         self.tree.close()
-        if os.path.exists(self.path):
-            os.remove(self.path)
+        if os.path.exists(self.path): os.remove(self.path)
 
     def _insert_keys(self, keys):
-        for k in keys:
-            self.tree.insert(make_record(k))
-
-    # --- insert + search básico ---
+        for k in keys: self.tree.insert(make_record(k))
 
     def test_insert_y_search_un_registro(self):
         self.tree.insert(make_record(10))
         results = self.tree.search(10)
-        assert len(results) == 1
-        assert key_extractor(results[0]) == 10
+        assert len(results) == 1 and key_extractor(results[0]) == 10
 
     def test_search_key_inexistente(self):
-        self._insert_keys([1, 2, 3])
-        assert self.tree.search(99) == []
+        self._insert_keys([1, 2, 3]); assert self.tree.search(99) == []
 
     def test_insert_ordenado_ascendente(self):
         self._insert_keys(range(1, 20))
-        for k in range(1, 20):
-            results = self.tree.search(k)
-            assert len(results) == 1
+        for k in range(1, 20): assert len(self.tree.search(k)) == 1
 
     def test_insert_ordenado_descendente(self):
         self._insert_keys(range(20, 0, -1))
-        for k in range(1, 21):
-            assert len(self.tree.search(k)) == 1
+        for k in range(1, 21): assert len(self.tree.search(k)) == 1
 
     def test_insert_aleatorio(self):
         import random
-        keys = list(range(1, 50))
-        random.shuffle(keys)
+        keys = list(range(1, 50)); random.shuffle(keys)
         self._insert_keys(keys)
-        for k in keys:
-            assert len(self.tree.search(k)) == 1
-
-    # --- duplicados ---
+        for k in keys: assert len(self.tree.search(k)) == 1
 
     def test_duplicados_se_almacenan(self):
-        self.tree.insert(make_record(5))
-        self.tree.insert(make_record(5))
-        results = self.tree.search(5)
-        assert len(results) == 2
+        self.tree.insert(make_record(5)); self.tree.insert(make_record(5))
+        assert len(self.tree.search(5)) == 2
 
     def test_tres_duplicados(self):
-        for _ in range(3):
-            self.tree.insert(make_record(7))
+        for _ in range(3): self.tree.insert(make_record(7))
         assert len(self.tree.search(7)) == 3
-
-    # --- range search ---
 
     def test_range_search_basico(self):
         self._insert_keys(range(1, 11))
-        results = self.tree.range_search(3, 7)
-        keys_found = sorted([key_extractor(r) for r in results])
+        keys_found = sorted(key_extractor(r) for r in self.tree.range_search(3, 7))
         assert keys_found == [3, 4, 5, 6, 7]
 
     def test_range_search_sin_resultados(self):
-        self._insert_keys([1, 2, 3])
-        assert self.tree.range_search(10, 20) == []
+        self._insert_keys([1, 2, 3]); assert self.tree.range_search(10, 20) == []
 
     def test_range_search_extremos_inclusivos(self):
         self._insert_keys([5, 10, 15])
-        results = self.tree.range_search(5, 15)
-        keys_found = sorted([key_extractor(r) for r in results])
+        keys_found = sorted(key_extractor(r) for r in self.tree.range_search(5, 15))
         assert keys_found == [5, 10, 15]
 
     def test_range_search_un_elemento(self):
         self._insert_keys([1, 5, 10])
         results = self.tree.range_search(5, 5)
-        assert len(results) == 1
-        assert key_extractor(results[0]) == 5
-
-    # --- splits ---
+        assert len(results) == 1 and key_extractor(results[0]) == 5
 
     def test_split_hoja(self):
-        # con order=4, el split ocurre al insertar el 5to elemento
         self._insert_keys([10, 20, 30, 40, 50])
-        for k in [10, 20, 30, 40, 50]:
-            assert len(self.tree.search(k)) == 1
+        for k in [10, 20, 30, 40, 50]: assert len(self.tree.search(k)) == 1
 
     def test_split_nodo_interno(self):
-        # suficientes inserts para provocar split de nodo interno
         self._insert_keys(range(1, 30))
-        for k in range(1, 30):
-            assert len(self.tree.search(k)) == 1
-
-    # --- métricas ---
+        for k in range(1, 30): assert len(self.tree.search(k)) == 1
 
     def test_search_genera_reads(self):
-        self._insert_keys(range(1, 10))
-        self.tree.dm.reset_stats()
-        self.tree.search(5)
-        assert self.tree.dm.read_count > 0
+        self._insert_keys(range(1, 10)); self.tree.dm.reset_stats()
+        self.tree.search(5); assert self.tree.dm.read_count > 0
 
     def test_insert_genera_writes(self):
-        self.tree.dm.reset_stats()
-        self.tree.insert(make_record(1))
+        self.tree.dm.reset_stats(); self.tree.insert(make_record(1))
         assert self.tree.dm.write_count > 0
 
     def test_reads_search_son_logaritmicos(self):
-        # con más datos los reads deben crecer lento (no linealmente)
-        self._insert_keys(range(1, 100))
-        self.tree.dm.reset_stats()
-        self.tree.search(50)
-        reads_100 = self.tree.dm.read_count
-
-        self.tree.close()
-        if os.path.exists(self.path):
-            os.remove(self.path)
-
+        self._insert_keys(range(1, 100)); self.tree.dm.reset_stats()
+        self.tree.search(50); reads_100 = self.tree.dm.read_count
+        self.tree.close(); os.remove(self.path)
         from index.bplustree import BPlusTree
         self.path = tmp_path()
         self.tree = BPlusTree(self.path, RECORD_SIZE, key_extractor, order=4)
-        self._insert_keys(range(1, 10000))
-        self.tree.dm.reset_stats()
-        self.tree.search(5000)
-        reads_10000 = self.tree.dm.read_count
-
-        # reads no deben crecer más de 10x para 100x más datos
+        self._insert_keys(range(1, 10000)); self.tree.dm.reset_stats()
+        self.tree.search(5000); reads_10000 = self.tree.dm.read_count
         assert reads_10000 < reads_100 * 10
-
-    # --- persistencia ---
 
     def test_root_persiste(self):
         from index.bplustree import BPlusTree
-        self._insert_keys(range(1, 20))
-        root_antes = self.tree.root
-        self.tree.close()
-
+        self._insert_keys(range(1, 20)); root_antes = self.tree.root; self.tree.close()
         tree2 = BPlusTree(self.path, RECORD_SIZE, key_extractor, order=4)
         assert tree2.root == root_antes
-        for k in range(1, 20):
-            assert len(tree2.search(k)) == 1
+        for k in range(1, 20): assert len(tree2.search(k)) == 1
         tree2.close()
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # 4. EXTENDIBLE HASHING
-# ═══════════════════════════════════════════════════════
+# =======================================================
 
 class TestExtendibleHash:
     def setup_method(self):
@@ -383,196 +303,143 @@ class TestExtendibleHash:
 
     def teardown_method(self):
         self.ht.close()
-        if os.path.exists(self.path):
-            os.remove(self.path)
+        if os.path.exists(self.path): os.remove(self.path)
 
     def test_insert_y_search(self):
         self.ht.insert(make_record(42))
         results = self.ht.search(42)
-        assert len(results) == 1
-        assert key_extractor(results[0]) == 42
+        assert len(results) == 1 and key_extractor(results[0]) == 42
 
     def test_search_key_inexistente(self):
         assert self.ht.search(999) == []
 
     def test_multiples_inserts(self):
         keys = [1, 2, 3, 4, 5, 10, 20, 50]
-        for k in keys:
-            self.ht.insert(make_record(k))
+        for k in keys: self.ht.insert(make_record(k))
         for k in keys:
             results = self.ht.search(k)
-            assert len(results) >= 1
-            assert key_extractor(results[0]) == k
+            assert len(results) >= 1 and key_extractor(results[0]) == k
 
     def test_split_por_overflow(self):
-        # insertar suficientes para forzar splits
+        for i in range(50): self.ht.insert(make_record(i))
         for i in range(50):
-            self.ht.insert(make_record(i))
-        for i in range(50):
-            results = self.ht.search(i)
-            assert any(key_extractor(r) == i for r in results)
+            assert any(key_extractor(r) == i for r in self.ht.search(i))
 
     def test_duplicados(self):
-        self.ht.insert(make_record(7))
-        self.ht.insert(make_record(7))
-        results = self.ht.search(7)
-        assert len(results) == 2
+        self.ht.insert(make_record(7)); self.ht.insert(make_record(7))
+        assert len(self.ht.search(7)) == 2
 
     def test_search_genera_reads(self):
-        self.ht.insert(make_record(1))
-        self.ht.dm.reset_stats()
-        self.ht.search(1)
-        assert self.ht.dm.read_count > 0
+        self.ht.insert(make_record(1)); self.ht.dm.reset_stats()
+        self.ht.search(1); assert self.ht.dm.read_count > 0
 
     def test_insert_genera_writes(self):
-        self.ht.dm.reset_stats()
-        self.ht.insert(make_record(1))
+        self.ht.dm.reset_stats(); self.ht.insert(make_record(1))
         assert self.ht.dm.write_count > 0
 
     def test_search_es_O1_aproximado(self):
-        # con 10 registros
-        for i in range(10):
-            self.ht.insert(make_record(i))
-        self.ht.dm.reset_stats()
-        self.ht.search(5)
-        reads_10 = self.ht.dm.read_count
-
-        # con 500 registros
-        self.ht.close()
-        if os.path.exists(self.path):
-            os.remove(self.path)
+        for i in range(10): self.ht.insert(make_record(i))
+        self.ht.dm.reset_stats(); self.ht.search(5); reads_10 = self.ht.dm.read_count
+        self.ht.close(); os.remove(self.path)
         from index.hash import ExtendibleHash
         self.path = tmp_path()
         self.ht = ExtendibleHash(self.path, RECORD_SIZE, key_extractor)
-        for i in range(500):
-            self.ht.insert(make_record(i))
-        self.ht.dm.reset_stats()
-        self.ht.search(250)
-        reads_500 = self.ht.dm.read_count
-
-        # O(1) → reads no deben escalar linealmente
-        assert reads_500 < reads_10 * 20  # margen generoso
+        for i in range(500): self.ht.insert(make_record(i))
+        self.ht.dm.reset_stats(); self.ht.search(250); reads_500 = self.ht.dm.read_count
+        assert reads_500 < reads_10 * 20
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # 5. SEQUENTIAL FILE
-# ═══════════════════════════════════════════════════════
+# =======================================================
 
 class TestSequentialFile:
     def setup_method(self):
         from index.sequential import SequentialFile
         self.main_path = tmp_path()
         self.overflow_path = tmp_path()
-        self.seq = SequentialFile(
-            self.main_path, self.overflow_path,
-            RECORD_SIZE, key_extractor
-        )
+        self.seq = SequentialFile(self.main_path, self.overflow_path, RECORD_SIZE, key_extractor)
 
     def teardown_method(self):
         self.seq.close()
         for p in [self.main_path, self.overflow_path]:
-            if os.path.exists(p):
-                os.remove(p)
+            if os.path.exists(p): os.remove(p)
 
     def test_insert_y_search(self):
         self.seq.insert(make_record(5))
         results = self.seq.search(5)
-        assert len(results) >= 1
-        assert key_extractor(results[0]) == 5
+        assert len(results) >= 1 and key_extractor(results[0]) == 5
 
     def test_search_inexistente(self):
-        self.seq.insert(make_record(1))
-        assert self.seq.search(99) == []
+        self.seq.insert(make_record(1)); assert self.seq.search(99) == []
 
     def test_range_search(self):
-        for k in range(1, 11):
-            self.seq.insert(make_record(k))
-        results = self.seq.range_search(3, 7)
-        keys_found = sorted([key_extractor(r) for r in results])
+        for k in range(1, 11): self.seq.insert(make_record(k))
+        keys_found = sorted(key_extractor(r) for r in self.seq.range_search(3, 7))
         assert keys_found == [3, 4, 5, 6, 7]
 
     def test_range_search_sin_resultados(self):
-        for k in [1, 2, 3]:
-            self.seq.insert(make_record(k))
+        for k in [1, 2, 3]: self.seq.insert(make_record(k))
         assert self.seq.range_search(10, 20) == []
 
     def test_range_resultado_ordenado(self):
         import random
-        keys = list(range(1, 20))
-        random.shuffle(keys)
-        for k in keys:
-            self.seq.insert(make_record(k))
+        keys = list(range(1, 20)); random.shuffle(keys)
+        for k in keys: self.seq.insert(make_record(k))
         results = self.seq.range_search(1, 20)
         keys_found = [key_extractor(r) for r in results]
         assert keys_found == sorted(keys_found)
 
     def test_rebuild_fusiona_correctamente(self):
-        for k in [10, 5, 1, 8, 3]:
-            self.seq.insert(make_record(k))
+        for k in [10, 5, 1, 8, 3]: self.seq.insert(make_record(k))
         self.seq.rebuild()
-        for k in [10, 5, 1, 8, 3]:
-            results = self.seq.search(k)
-            assert len(results) >= 1
+        for k in [10, 5, 1, 8, 3]: assert len(self.seq.search(k)) >= 1
 
     def test_rebuild_limpia_overflow(self):
-        for k in range(10):
-            self.seq.insert(make_record(k))
+        for k in range(10): self.seq.insert(make_record(k))
         self.seq.rebuild()
-        # overflow debe estar vacío
-        overflow_records = self.seq.overflow.scan()
-        assert overflow_records == []
+        assert self.seq.overflow.scan() == []
 
     def test_unified_dm_reset_stats(self):
-        self.seq.insert(make_record(1))
-        self.seq.dm.reset_stats()
-        assert self.seq.dm.read_count == 0
-        assert self.seq.dm.write_count == 0
+        self.seq.insert(make_record(1)); self.seq.dm.reset_stats()
+        assert self.seq.dm.read_count == 0 and self.seq.dm.write_count == 0
 
     def test_unified_dm_suma_ambos(self):
-        self.seq.insert(make_record(1))
-        self.seq.dm.reset_stats()
-        self.seq.search(1)
-        # debe reflejar reads de main + overflow
-        assert self.seq.dm.read_count > 0
+        self.seq.insert(make_record(1)); self.seq.dm.reset_stats()
+        self.seq.search(1); assert self.seq.dm.read_count > 0
 
     def test_overflow_limit_trigger_rebuild(self):
         self.seq.overflow_limit = 5
-        for k in range(5):        # FIX: exactamente 5 → dispara rebuild → count queda en 0
-            self.seq.insert(make_record(k))
+        for k in range(5): self.seq.insert(make_record(k))
         assert self.seq._overflow_count == 0
 
 
-# ═══════════════════════════════════════════════════════
+# =======================================================
 # 6. ENGINE
-# ═══════════════════════════════════════════════════════
+# =======================================================
 
 class TestEngine:
     def setup_method(self):
         from engine.engine import Engine
         from index.bplustree import BPlusTree
         from index.hash import ExtendibleHash
-
         self.Engine = Engine
         self.BPlusTree = BPlusTree
         self.ExtendibleHash = ExtendibleHash
-
         self.paths = []
         self.engine = Engine()
 
     def teardown_method(self):
         self.engine.close()
         for p in self.paths:
-            if os.path.exists(p):
-                os.remove(p)
+            if os.path.exists(p): os.remove(p)
 
     def _make_bptree(self):
-        p = tmp_path()
-        self.paths.append(p)
+        p = tmp_path(); self.paths.append(p)
         return self.BPlusTree(p, RECORD_SIZE, key_extractor, order=4)
 
     def _make_hash(self):
-        p = tmp_path()
-        self.paths.append(p)
+        p = tmp_path(); self.paths.append(p)
         return self.ExtendibleHash(p, RECORD_SIZE, key_extractor)
 
     def test_create_table(self):
@@ -586,10 +453,9 @@ class TestEngine:
 
     def test_insert_y_search_bptree(self):
         self.engine.create_table("t", self._make_bptree())
-        result, stats = self.engine.insert("t", make_record(10))
+        self.engine.insert("t", make_record(10))
         results, stats = self.engine.search("t", 10)
-        assert len(results) == 1
-        assert key_extractor(results[0]) == 10
+        assert len(results) == 1 and key_extractor(results[0]) == 10
 
     def test_insert_y_search_hash(self):
         self.engine.create_table("h", self._make_hash())
@@ -599,26 +465,21 @@ class TestEngine:
 
     def test_range_search_engine(self):
         self.engine.create_table("r", self._make_bptree())
-        for k in range(1, 11):
-            self.engine.insert("r", make_record(k))
+        for k in range(1, 11): self.engine.insert("r", make_record(k))
         results, stats = self.engine.range_search("r", 3, 7)
-        keys_found = sorted([key_extractor(r) for r in results])
-        assert keys_found == [3, 4, 5, 6, 7]
+        assert sorted(key_extractor(r) for r in results) == [3, 4, 5, 6, 7]
 
     def test_stats_tienen_reads_y_writes(self):
         self.engine.create_table("s", self._make_bptree())
         self.engine.insert("s", make_record(1))
         results, stats = self.engine.search("s", 1)
-        assert "reads" in stats
-        assert "writes" in stats
+        assert "reads" in stats and "writes" in stats
 
     def test_stats_se_resetean_por_operacion(self):
         self.engine.create_table("m", self._make_bptree())
-        for k in range(20):
-            self.engine.insert("m", make_record(k))
-        # search individual debe tener reads bajos (no acumulados)
+        for k in range(20): self.engine.insert("m", make_record(k))
         results, stats = self.engine.search("m", 10)
-        assert stats["reads"] < 20  # no puede haber leído todas las páginas
+        assert stats["reads"] < 20
 
     def test_tabla_inexistente(self):
         with pytest.raises(Exception, match="no existe"):
@@ -626,52 +487,43 @@ class TestEngine:
 
     def test_execute_insert(self):
         self.engine.create_table("e", self._make_bptree())
-        query = {"type": "INSERT", "table": "e", "value": 42}
-        self.engine.execute(query, lambda v: make_record(v))
+        self.engine.execute({"type": "INSERT", "table": "e", "value": 42},
+                            lambda v: make_record(v))
 
     def test_execute_select_equal(self):
         self.engine.create_table("e2", self._make_bptree())
-        query_ins = {"type": "INSERT", "table": "e2", "value": 7}
-        self.engine.execute(query_ins, lambda v: make_record(v))
-        query_sel = {
-            "type": "SELECT", "table": "e2",
-            "condition": {"type": "EQUAL", "value": 7}
-        }
-        results, stats = self.engine.execute(query_sel, lambda v: make_record(v))
+        self.engine.execute({"type": "INSERT", "table": "e2", "value": 7},
+                            lambda v: make_record(v))
+        results, _ = self.engine.execute(
+            {"type": "SELECT", "table": "e2", "condition": {"type": "EQUAL", "value": 7}},
+            lambda v: make_record(v))
         assert len(results) >= 1
 
     def test_execute_select_between(self):
         self.engine.create_table("e3", self._make_bptree())
         for k in range(1, 11):
-            self.engine.execute(
-                {"type": "INSERT", "table": "e3", "value": k},
-                lambda v: make_record(v)
-            )
-        results, stats = self.engine.execute(
+            self.engine.execute({"type": "INSERT", "table": "e3", "value": k},
+                                lambda v: make_record(v))
+        results, _ = self.engine.execute(
             {"type": "SELECT", "table": "e3",
              "condition": {"type": "BETWEEN", "begin": 2, "end": 5}},
-            lambda v: make_record(v)
-        )
-        keys_found = sorted([key_extractor(r) for r in results])
-        assert keys_found == [2, 3, 4, 5]
+            lambda v: make_record(v))
+        assert sorted(key_extractor(r) for r in results) == [2, 3, 4, 5]
 
     def test_close_cierra_todos(self):
         self.engine.create_table("c1", self._make_bptree())
         self.engine.create_table("c2", self._make_hash())
-        # no debe lanzar excepción
         self.engine.close()
 
 
-# ═══════════════════════════════════════════════════════
-# 7. MÉTRICAS (MetricsLogger)
-# ═══════════════════════════════════════════════════════
+# =======================================================
+# 7. METRICAS
+# =======================================================
 
 class TestMetricsLogger:
     def setup_method(self):
         from utils.metrics import MetricsLogger
-        from storage.disk_manager import DiskManager
         from index.bplustree import BPlusTree
-
         self.MetricsLogger = MetricsLogger
         self.path = tmp_path()
         self.log_path = tmp_path(suffix=".json")
@@ -680,16 +532,14 @@ class TestMetricsLogger:
     def teardown_method(self):
         self.tree.close()
         for p in [self.path, self.log_path]:
-            if os.path.exists(p):
-                os.remove(p)
+            if os.path.exists(p): os.remove(p)
 
     def test_measure_captura_reads(self):
         logger = self.MetricsLogger()
         self.tree.insert(make_record(1))
         with logger.measure("bplustree", "search", n=1, dm=self.tree.dm):
             self.tree.search(1)
-        assert len(logger.entries) == 1
-        assert logger.entries[0]["reads"] > 0
+        assert len(logger.entries) == 1 and logger.entries[0]["reads"] > 0
 
     def test_measure_captura_tiempo(self):
         logger = self.MetricsLogger()
@@ -713,8 +563,7 @@ class TestMetricsLogger:
         logger.save(self.log_path)
         assert os.path.exists(self.log_path)
         with open(self.log_path) as f:
-            data = json.load(f)
-        assert len(data) == 1
+            assert len(json.load(f)) == 1
 
     def test_multiples_mediciones(self):
         logger = self.MetricsLogger()
@@ -725,6 +574,122 @@ class TestMetricsLogger:
         assert len(logger.entries) == 5
 
 
+# =======================================================
+# 8. R-TREE
+# =======================================================
+
+class TestRTree:
+    def setup_method(self):
+        from index.rtree import RTree
+        self.path = tmp_path()
+        self.tree = RTree(self.path, RECORD_SIZE_RT, point_extractor)
+
+    def teardown_method(self):
+        self.tree.close()
+        if os.path.exists(self.path): os.remove(self.path)
+
+    # --- insert + range_search ---
+
+    def test_insert_y_range_encuentra_punto(self):
+        self.tree.insert(make_spatial_record(1, 0.0, 0.0))
+        assert len(self.tree.range_search(0.0, 0.0, 1.0)) == 1
+
+    def test_range_no_encuentra_fuera_del_radio(self):
+        self.tree.insert(make_spatial_record(1, 10.0, 10.0))
+        assert len(self.tree.range_search(0.0, 0.0, 5.0)) == 0
+
+    def test_range_exactamente_en_el_borde(self):
+        self.tree.insert(make_spatial_record(1, 3.0, 4.0))  # dist = 5.0
+        assert len(self.tree.range_search(0.0, 0.0, 5.0)) == 1
+
+    def test_range_multiples_puntos(self):
+        for i, (x, y) in enumerate([(0,0),(1,0),(0,1),(5,5),(10,10)]):
+            self.tree.insert(make_spatial_record(i, float(x), float(y)))
+        assert len(self.tree.range_search(0.0, 0.0, 2.0)) == 3
+
+    def test_range_sin_resultados(self):
+        for i in range(5):
+            self.tree.insert(make_spatial_record(i, float(i*10), float(i*10)))
+        assert self.tree.range_search(500.0, 500.0, 1.0) == []
+
+    def test_range_todos_los_puntos(self):
+        n = 20
+        for i in range(n): self.tree.insert(make_spatial_record(i, float(i), 0.0))
+        assert len(self.tree.range_search(0.0, 0.0, 1000.0)) == n
+
+    # --- knn ---
+
+    def test_knn_1_vecino(self):
+        for id_, x in [(1, 1.0), (2, 5.0), (3, 10.0)]:
+            self.tree.insert(make_spatial_record(id_, x, 0.0))
+        results = self.tree.knn(0.0, 0.0, 1)
+        assert len(results) == 1 and id_extractor(results[0]) == 1
+
+    def test_knn_k_vecinos(self):
+        for i in range(1, 6): self.tree.insert(make_spatial_record(i, float(i), 0.0))
+        results = self.tree.knn(0.0, 0.0, 3)
+        assert len(results) == 3 and set(id_extractor(r) for r in results) == {1, 2, 3}
+
+    def test_knn_k_mayor_que_puntos(self):
+        for i in range(3): self.tree.insert(make_spatial_record(i, float(i), 0.0))
+        assert len(self.tree.knn(0.0, 0.0, 10)) == 3
+
+    def test_knn_punto_exacto(self):
+        self.tree.insert(make_spatial_record(99, 7.0, 7.0))
+        results = self.tree.knn(7.0, 7.0, 1)
+        assert len(results) == 1 and id_extractor(results[0]) == 99
+
+    # --- splits y volumen ---
+
+    def test_muchos_inserts_sin_error(self):
+        import random; random.seed(42)
+        for i in range(200):
+            self.tree.insert(make_spatial_record(i,
+                random.uniform(-100, 100), random.uniform(-100, 100)))
+        assert len(self.tree.range_search(0.0, 0.0, 200.0)) <= 200
+
+    def test_splits_no_pierden_datos(self):
+        import random; random.seed(7)
+        n = 150
+        points = [(random.uniform(0, 50), random.uniform(0, 50)) for _ in range(n)]
+        for i, (x, y) in enumerate(points):
+            self.tree.insert(make_spatial_record(i, x, y))
+        assert len(self.tree.range_search(25.0, 25.0, 200.0)) == n
+
+    # --- persistencia ---
+
+    def test_root_persiste(self):
+        from index.rtree import RTree
+        for i in range(20):
+            self.tree.insert(make_spatial_record(i, float(i), float(i)))
+        root_antes = self.tree.root
+        self.tree.close()
+        tree2 = RTree(self.path, RECORD_SIZE_RT, point_extractor)
+        assert tree2.root == root_antes
+        assert len(tree2.range_search(0.0, 0.0, 1000.0)) == 20
+        tree2.close()
+        self.tree = tree2
+
+    # --- métricas ---
+
+    def test_insert_genera_writes(self):
+        self.tree.dm.reset_stats()
+        self.tree.insert(make_spatial_record(1, 1.0, 1.0))
+        assert self.tree.dm.write_count > 0
+
+    def test_range_search_genera_reads(self):
+        for i in range(10): self.tree.insert(make_spatial_record(i, float(i), 0.0))
+        self.tree.dm.reset_stats()
+        self.tree.range_search(0.0, 0.0, 100.0)
+        assert self.tree.dm.read_count > 0
+
+    def test_knn_genera_reads(self):
+        for i in range(10): self.tree.insert(make_spatial_record(i, float(i), 0.0))
+        self.tree.dm.reset_stats()
+        self.tree.knn(0.0, 0.0, 3)
+        assert self.tree.dm.read_count > 0
+
+
 # -------------------------------------------------------
 # RUNNER MANUAL (sin pytest)
 # -------------------------------------------------------
@@ -733,7 +698,6 @@ if __name__ == "__main__":
     import sys
     import traceback
 
-    # Fix encoding para Windows (cp1252 no soporta Unicode especial)
     if hasattr(sys.stdout, "buffer"):
         import io
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -751,6 +715,7 @@ if __name__ == "__main__":
         TestSequentialFile,
         TestEngine,
         TestMetricsLogger,
+        TestRTree,
     ]
 
     total = 0
@@ -780,7 +745,7 @@ if __name__ == "__main__":
                 if hasattr(instance, "teardown_method"):
                     try:
                         instance.teardown_method()
-                    except:
+                    except Exception:
                         pass
                 print(f"  {FAIL} {method_name}")
                 print(f"         {type(e).__name__}: {e}")
