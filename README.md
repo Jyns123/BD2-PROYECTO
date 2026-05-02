@@ -10,7 +10,7 @@ Sistema de indexación sobre memoria secundaria que implementa desde cero las es
 | Nombre | GitHub |
 |--------|--------|
 | Jyns Ordóñez | — |
-| — | — |
+| Denzel Bautista | — |
 | — | — |
 
 ---
