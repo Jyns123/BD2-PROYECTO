@@ -1,9 +1,12 @@
 def tokenize(query: str):
-    query = query.replace("(", " ( ").replace(")", " ) ")
-    query = query.replace(",", " , ")
+    query = query.replace(';', ' ').replace('(', ' ( ').replace(')', ' ) ')
+    query = query.replace(',', ' , ')
     tokens = query.strip().split()
 
     # normalizar
-    return [t.upper() if t.upper() in {
-        "SELECT", "FROM", "WHERE", "BETWEEN", "AND", "INSERT", "INTO", "VALUES"
-    } else t for t in tokens]
+    keywords = {
+        'SELECT', 'FROM', 'WHERE', 'BETWEEN', 'AND', 'INSERT', 'INTO', 'VALUES',
+        'CREATE', 'TABLE', 'INDEX', 'BPLUSTREE', 'HASH', 'SEQUENTIAL', 'HEAP', 'RTREE'
+    }
+    
+    return [t.upper() if t.upper() in keywords else t for t in tokens]
