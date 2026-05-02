@@ -269,7 +269,39 @@ class Engine:
     def show_tables(self):
         return list(self.tables.keys())
 
+    def drop_table(self, name, base_path="data"):
+        if name not in self.tables:
+            raise Exception(f"Tabla '{name}' no existe")
+
+        table = self.tables[name]
+        if hasattr(table.index, "close"):
+            table.index.close()
+
+        index_type = table.index_type or self._infer_index_type(table.index)
+
+        main_path = os.path.join(base_path, f"{name}.db")
+        overflow_path = os.path.join(base_path, f"{name}_overflow.db")
+        dir_path = main_path + ".dir"
+
+        for path in [main_path, overflow_path, dir_path]:
+            if os.path.exists(path):
+                os.remove(path)
+
+        del self.tables[name]
+
+        return {"table": name, "index": index_type}
+
     def close(self):
         for table in self.tables.values():
             if hasattr(table.index, "close"):
                 table.index.close()
+
+    def _infer_index_type(self, index):
+        name = index.__class__.__name__.lower()
+        if "sequential" in name:
+            return "SEQUENTIAL"
+        if "hash" in name:
+            return "HASH"
+        if "rtree" in name:
+            return "RTREE"
+        return "BPLUSTREE"
