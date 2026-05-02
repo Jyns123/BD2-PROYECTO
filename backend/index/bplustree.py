@@ -276,6 +276,69 @@ class BPlusTree:
         return res
 
     # -------------------------
+    # REMOVE
+    # -------------------------
+
+    def remove(self, key):
+        self.cache.clear()  # simular disco real
+
+        node_id = self._find_leaf(key)
+        removed = 0
+
+        while node_id != -1:
+            node = self._read_node(node_id)
+            if not node.is_leaf:
+                break
+
+            if node.keys and key < node.keys[0]:
+                break
+
+            last_key = node.keys[-1] if node.keys else None
+
+            if node.keys:
+                new_keys = []
+                new_children = []
+                for k, rec in zip(node.keys, node.children):
+                    if k == key:
+                        removed += 1
+                    else:
+                        new_keys.append(k)
+                        new_children.append(rec)
+
+                if len(new_keys) != len(node.keys):
+                    node.keys = new_keys
+                    node.children = new_children
+                    self._write_node(node_id, node)
+
+            if last_key is None:
+                node_id = node.next
+                continue
+
+            if key < last_key:
+                break
+
+            if key == last_key:
+                node_id = node.next
+                continue
+
+            if key > last_key:
+                node_id = node.next
+                continue
+
+        return removed
+
+    def _find_leaf(self, key):
+        node_id = self.root
+        while True:
+            node = self._read_node(node_id)
+            if node.is_leaf:
+                return node_id
+            i = 0
+            while i < len(node.keys) and key > node.keys[i]:
+                i += 1
+            node_id = node.children[i]
+
+    # -------------------------
     # CLOSE
     # -------------------------
 

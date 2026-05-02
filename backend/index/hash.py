@@ -149,6 +149,35 @@ class ExtendibleHash:
         return [r for r in page.read_records() if self.key(r) == key_value]
 
     # -----------------------------
+    # REMOVE
+    # -----------------------------
+    def remove(self, key_value):
+        idx = self._get_index(key_value)
+
+        if idx >= len(self.directory):
+            return 0
+
+        bucket_id = self.directory[idx]
+        raw = self.dm.read_page(bucket_id)
+        page = Page.from_bytes(raw, self.record_size)
+
+        kept = []
+        removed = 0
+        for r in page.read_records():
+            if self.key(r) == key_value:
+                removed += 1
+            else:
+                kept.append(r)
+
+        if removed > 0:
+            new_page = Page(self.record_size)
+            for r in kept:
+                new_page.insert_record(r)
+            self.dm.write_page(bucket_id, new_page.to_bytes())
+
+        return removed
+
+    # -----------------------------
     # CLOSE
     # -----------------------------
     def close(self):
