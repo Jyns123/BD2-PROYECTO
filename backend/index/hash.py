@@ -1,6 +1,6 @@
 # index/hash.py
 
-from storage.disk_manager import DiskManager
+from storage.disk_manager import DiskManager, PAGE_SIZE
 from storage.page import Page
 
 
@@ -12,6 +12,8 @@ class ExtendibleHash:
             raise ValueError("record_size inválido")
 
         self.dm = DiskManager(file_path)
+        self.meta_path = file_path + ".dir"
+        self.meta_dm = DiskManager(self.meta_path)
         self.record_size = record_size
         self.key = key_extractor
 
@@ -28,9 +30,12 @@ class ExtendibleHash:
             self.directory = [b0, b1]
             self.local_depths[b0] = 1   # NUEVO
             self.local_depths[b1] = 1   # NUEVO
+            self._save_metadata()
         else:
-            self.directory = [1, 2]
-            self.local_depths = {1: 1, 2: 1}
+            if not self._load_metadata():
+                self.directory = [1, 2]
+                self.local_depths = {1: 1, 2: 1}
+                self._save_metadata()
 
     # -----------------------------
     # BUCKET INIT
@@ -131,6 +136,82 @@ class ExtendibleHash:
         for i in range(len(self.directory)):
             if self.directory[i] == old_bucket and (i & split_bit):
                 self.directory[i] = new_bucket
+        self._save_metadata()
+
+    # -----------------------------
+    # METADATA (DIRECTORY)
+    # -----------------------------
+    def _save_metadata(self):
+        dir_len = len(self.directory)
+        payload = bytearray()
+        payload += int(self.global_depth).to_bytes(4, "big")
+        payload += int(dir_len).to_bytes(4, "big")
+
+        for bucket in self.directory:
+            payload += int(bucket).to_bytes(4, "big")
+
+        for bucket in self.directory:
+            local_d = self.local_depths.get(bucket, 1)
+            payload += int(local_d).to_bytes(4, "big")
+
+        header = b"EH02" + int(len(payload)).to_bytes(4, "big")
+        data = header + payload
+
+        needed_pages = (len(data) + PAGE_SIZE - 1) // PAGE_SIZE
+        total_pages = self.meta_dm._get_total_pages()
+        while total_pages < needed_pages:
+            self.meta_dm.allocate_page()
+            total_pages += 1
+
+        for page_id in range(needed_pages):
+            start = page_id * PAGE_SIZE
+            end = start + PAGE_SIZE
+            chunk = data[start:end]
+            if len(chunk) < PAGE_SIZE:
+                chunk = chunk + b"\x00" * (PAGE_SIZE - len(chunk))
+            self.meta_dm.write_page(page_id, chunk)
+
+    def _load_metadata(self):
+        first = self.meta_dm.read_page(0)
+        if first[0:4] != b"EH02":
+            return False
+
+        total_len = int.from_bytes(first[4:8], "big")
+        if total_len <= 0:
+            return False
+
+        needed_pages = (8 + total_len + PAGE_SIZE - 1) // PAGE_SIZE
+        data = bytearray()
+        for page_id in range(needed_pages):
+            data.extend(self.meta_dm.read_page(page_id))
+
+        payload = bytes(data[8:8 + total_len])
+        if len(payload) < 8:
+            return False
+
+        self.global_depth = int.from_bytes(payload[0:4], "big")
+        dir_len = int.from_bytes(payload[4:8], "big")
+        if dir_len <= 0:
+            return False
+
+        offset = 8
+        directory = []
+        for _ in range(dir_len):
+            directory.append(int.from_bytes(payload[offset:offset + 4], "big"))
+            offset += 4
+
+        local_depths = {}
+        for i in range(dir_len):
+            local_d = int.from_bytes(payload[offset:offset + 4], "big")
+            offset += 4
+            bucket = directory[i]
+            prev = local_depths.get(bucket, 0)
+            if local_d > prev:
+                local_depths[bucket] = local_d
+
+        self.directory = directory
+        self.local_depths = local_depths
+        return True
 
     # -----------------------------
     # SEARCH
@@ -182,3 +263,4 @@ class ExtendibleHash:
     # -----------------------------
     def close(self):
         self.dm.close()
+        self.meta_dm.close()
