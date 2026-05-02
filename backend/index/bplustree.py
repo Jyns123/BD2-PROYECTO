@@ -280,54 +280,17 @@ class BPlusTree:
     # -------------------------
 
     def remove(self, key):
-        self.cache.clear()  # simular disco real
+        self.cache.clear()                           # simular disco real
+        path = []
+        leaf_id = self._find_leaf_with_path(key, path)
+        removed = self._delete_from_leaf(leaf_id, key)
+        if removed == 0:
+            return 0
 
-        node_id = self._find_leaf(key)
-        removed = 0
-
-        while node_id != -1:
-            node = self._read_node(node_id)
-            if not node.is_leaf:
-                break
-
-            if node.keys and key < node.keys[0]:
-                break
-
-            last_key = node.keys[-1] if node.keys else None
-
-            if node.keys:
-                new_keys = []
-                new_children = []
-                for k, rec in zip(node.keys, node.children):
-                    if k == key:
-                        removed += 1
-                    else:
-                        new_keys.append(k)
-                        new_children.append(rec)
-
-                if len(new_keys) != len(node.keys):
-                    node.keys = new_keys
-                    node.children = new_children
-                    self._write_node(node_id, node)
-
-            if last_key is None:
-                node_id = node.next
-                continue
-
-            if key < last_key:
-                break
-
-            if key == last_key:
-                node_id = node.next
-                continue
-
-            if key > last_key:
-                node_id = node.next
-                continue
-
+        self._rebalance_after_delete(leaf_id, path)
         return removed
 
-    def _find_leaf(self, key):
+    def _find_leaf_with_path(self, key, path):
         node_id = self.root
         while True:
             node = self._read_node(node_id)
@@ -336,7 +299,138 @@ class BPlusTree:
             i = 0
             while i < len(node.keys) and key > node.keys[i]:
                 i += 1
+            path.append((node_id, i))
             node_id = node.children[i]
+
+    def _delete_from_leaf(self, leaf_id, key):
+        node = self._read_node(leaf_id)
+        if not node.is_leaf:
+            return 0
+
+        new_keys = []
+        new_children = []
+        removed = 0
+
+        for k, rec in zip(node.keys, node.children):
+            if k == key:
+                removed += 1
+            else:
+                new_keys.append(k)
+                new_children.append(rec)
+
+        if removed > 0:
+            node.keys = new_keys
+            node.children = new_children
+            self._write_node(leaf_id, node)
+
+        return removed
+
+    def _rebalance_after_delete(self, node_id, path):
+        min_keys = max(1, self.order // 2)
+
+        while True:
+            node = self._read_node(node_id)
+
+            if node_id == self.root:
+                if not node.is_leaf and len(node.keys) == 0:
+                    self.root = node.children[0]
+                    self.dm.set_root(self.root)
+                return
+
+            if len(node.keys) >= min_keys:
+                return
+
+            if not path:
+                return
+
+            parent_id, idx = path.pop()
+            parent = self._read_node(parent_id)
+
+            left_id = parent.children[idx - 1] if idx > 0 else None
+            right_id = parent.children[idx + 1] if idx + 1 < len(parent.children) else None
+
+            # Borrow from left
+            if left_id is not None:
+                left = self._read_node(left_id)
+                if len(left.keys) > min_keys:
+                    if node.is_leaf:
+                        node.keys.insert(0, left.keys.pop())
+                        node.children.insert(0, left.children.pop())
+                        parent.keys[idx - 1] = node.keys[0]
+                    else:
+                        sep = parent.keys[idx - 1]
+                        borrowed_key = left.keys.pop()
+                        borrowed_child = left.children.pop()
+                        node.keys.insert(0, sep)
+                        node.children.insert(0, borrowed_child)
+                        parent.keys[idx - 1] = borrowed_key
+
+                    self._write_node(left_id, left)
+                    self._write_node(node_id, node)
+                    self._write_node(parent_id, parent)
+                    return
+
+            # Borrow from right
+            if right_id is not None:
+                right = self._read_node(right_id)
+                if len(right.keys) > min_keys:
+                    if node.is_leaf:
+                        node.keys.append(right.keys.pop(0))
+                        node.children.append(right.children.pop(0))
+                        parent.keys[idx] = right.keys[0]
+                    else:
+                        sep = parent.keys[idx]
+                        borrowed_key = right.keys.pop(0)
+                        borrowed_child = right.children.pop(0)
+                        node.keys.append(sep)
+                        node.children.append(borrowed_child)
+                        parent.keys[idx] = borrowed_key
+
+                    self._write_node(right_id, right)
+                    self._write_node(node_id, node)
+                    self._write_node(parent_id, parent)
+                    return
+
+            # Merge
+            if left_id is not None:
+                left = self._read_node(left_id)
+                if node.is_leaf:
+                    left.keys.extend(node.keys)
+                    left.children.extend(node.children)
+                    left.next = node.next
+                else:
+                    sep = parent.keys[idx - 1]
+                    left.keys.append(sep)
+                    left.keys.extend(node.keys)
+                    left.children.extend(node.children)
+
+                parent.keys.pop(idx - 1)
+                parent.children.pop(idx)
+
+                self._write_node(left_id, left)
+                self._write_node(parent_id, parent)
+                node_id = parent_id
+                continue
+
+            if right_id is not None:
+                right = self._read_node(right_id)
+                if node.is_leaf:
+                    node.keys.extend(right.keys)
+                    node.children.extend(right.children)
+                    node.next = right.next
+                else:
+                    sep = parent.keys[idx]
+                    node.keys.append(sep)
+                    node.keys.extend(right.keys)
+                    node.children.extend(right.children)
+
+                parent.keys.pop(idx)
+                parent.children.pop(idx + 1)
+
+                self._write_node(node_id, node)
+                self._write_node(parent_id, parent)
+                node_id = parent_id
+                continue
 
     # -------------------------
     # CLOSE
