@@ -109,7 +109,9 @@ class Engine:
     # EXECUTE (con Parser)
     # -----------------------------
     def execute(self, query_dict, make_record,
-                create_table=None, delete_record=None, select_all=None):
+                create_table=None, delete_record=None, select_all=None,
+                record_size=None, key_extractor=None, point_extractor=None,
+                base_path="data", order=4):
         qtype = query_dict["type"]
 
         if qtype == "INSERT":
@@ -180,7 +182,17 @@ class Engine:
             if create_table:
                 create_table(query_dict)
             else:
-                raise Exception("CREATE TABLE no está conectado al engine")
+                if record_size is None or key_extractor is None:
+                    raise Exception("CREATE TABLE requiere record_size y key_extractor")
+                self.create_table_from_dict(
+                    query_dict,
+                    record_size,
+                    key_extractor,
+                    make_record,
+                    point_extractor=point_extractor,
+                    base_path=base_path,
+                    order=order
+                )
             return None, {"reads": 0, "writes": 0}
 
         if qtype == "DELETE":
