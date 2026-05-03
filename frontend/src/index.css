@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+/* ---- Theme ---- */
+@theme {
+  --color-bg-primary: #0f1117;
+  --color-bg-secondary: #161822;
+  --color-bg-tertiary: #1c1f2e;
+  --color-bg-hover: #242840;
+  --color-bg-active: #2a2f4a;
+  --color-border: #2a2d3e;
+  --color-border-focus: #4f6ef7;
+  --color-text-primary: #e2e4ed;
+  --color-text-secondary: #8b8fa7;
+  --color-text-muted: #5c6078;
+  --color-accent: #4f6ef7;
+  --color-accent-hover: #6380ff;
+  --color-accent-subtle: rgba(79, 110, 247, 0.12);
+  --color-success: #34d399;
+  --color-success-subtle: rgba(52, 211, 153, 0.12);
+  --color-warning: #fbbf24;
+  --color-warning-subtle: rgba(251, 191, 36, 0.12);
+  --color-error: #f87171;
+  --color-error-subtle: rgba(248, 113, 113, 0.12);
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ---- Base ---- */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  font-size: 20px;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 6px; height: 6¿px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+
+/* ---- CodeMirror overrides ---- */
+.cm-editor {
+  font-family: var(--font-mono) !important;
+  font-size: 15px !important;
+  background: var(--color-bg-primary) !important;
+  height: 100% !important;
+}
+.cm-editor .cm-gutters {
+  background: var(--color-bg-secondary) !important;
+  border-right: 1px solid var(--color-border) !important;
+}
+.cm-editor .cm-activeLineGutter {
+  background: var(--color-bg-tertiary) !important;
+}
+.cm-editor .cm-activeLine {
+  background: rgba(79, 110, 247, 0.05) !important;
+}
+.cm-editor.cm-focused { outline: none !important; }
+
+/* ---- Animations ---- */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.animate-fade-in { animation: fadeIn 0.2s ease-out; }
+.animate-slide-in { animation: slideIn 0.15s ease-out; }
