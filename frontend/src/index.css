@@ -26,10 +26,14 @@
 }
 
 /* ---- Base ---- */
-* { box-sizing: border-box; margin: 0; padding: 0; }
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+  body, h1, h2, h3, h4, h5, h6, p, ul, ol, figure { margin: 0; padding: 0; }
+  ul, ol { list-style: none; }
+}
 
 html {
-  font-size: 20px;
+  font-size: 14px;
 }
 
 body {
@@ -40,29 +44,55 @@ body {
 }
 
 /* ---- Scrollbar ---- */
-::-webkit-scrollbar { width: 6px; height: 6¿px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--color-bg-secondary); }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 0; border: 2px solid var(--color-bg-secondary); }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+::-webkit-scrollbar-corner { background: var(--color-bg-secondary); }
 
 /* ---- CodeMirror overrides ---- */
 .cm-editor {
   font-family: var(--font-mono) !important;
-  font-size: 15px !important;
+  font-size: 13px !important;
   background: var(--color-bg-primary) !important;
   height: 100% !important;
 }
+.cm-editor .cm-content {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+.cm-line {
+  padding-left: 0 !important;
+}
 .cm-editor .cm-gutters {
-  background: var(--color-bg-secondary) !important;
-  border-right: 1px solid var(--color-border) !important;
+  background: var(--color-bg-primary) !important;
+  border-right: none !important;
+}
+.cm-editor .cm-gutter {
+  user-select: none !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+.cm-editor .cm-lineNumber {
+  color: var(--color-text-muted) !important;
+  user-select: none !important;
+  padding: 0 8px !important;
 }
 .cm-editor .cm-activeLineGutter {
-  background: var(--color-bg-tertiary) !important;
+  background: transparent !important;
+}
+.cm-editor .cm-activeLineGutter .cm-lineNumber {
+  color: var(--color-text-secondary) !important;
 }
 .cm-editor .cm-activeLine {
   background: rgba(79, 110, 247, 0.05) !important;
 }
 .cm-editor.cm-focused { outline: none !important; }
+.cm-scroller { overflow: auto !important; }
+.cm-selectionLayer .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionLayer .cm-selectionBackground {
+  background-color: rgba(79, 110, 247, 0.4) !important;
+}
 
 /* ---- Animations ---- */
 @keyframes fadeIn {

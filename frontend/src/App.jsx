@@ -1,11 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { Maximize2, Minimize2, AlertCircle, CheckCircle2, Info } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import QueryEditor from './components/QueryEditor';
 import ResultsPanel from './components/ResultsPanel';
 import StatsBar from './components/StatsBar';
-import TableInspector from './components/TableInspector';
 import CreateTableModal from './components/CreateTableModal';
 import { getTables, getTable, runQuery, dropTable } from './services/api';
+
+const BOTTOM_TABS = [
+  { id: 'results', label: 'Data Output' },
+  { id: 'messages', label: 'Messages' },
+  { id: 'notifications', label: 'Notifications' },
+];
 
 export default function App() {
   const [tables, setTables] = useState([]);
@@ -15,12 +21,15 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [activeTab, setActiveTab] = useState('results');
+  const [cursor, setCursor] = useState({ line: 1, col: 1 });
+  const [maximized, setMaximized] = useState(null); // 'editor' | 'bottom' | null
 
   // -- Resizable panel --
-  const [editorHeight, setEditorHeight] = useState(200);
+  const [editorHeight, setEditorHeight] = useState(220);
   const dragging = useRef(false);
   const containerRef = useRef(null);
 
@@ -63,7 +72,6 @@ export default function App() {
 
   useEffect(() => { refreshTables(); }, [refreshTables]);
 
-  // -- Select table --
   const handleSelectTable = async (name) => {
     setSelectedTable(name);
     try {
@@ -74,7 +82,6 @@ export default function App() {
     }
   };
 
-  // -- Drop table --
   const handleDropTable = async (name) => {
     try {
       await dropTable(name);
@@ -82,19 +89,27 @@ export default function App() {
         setSelectedTable(null);
         setTableInfo(null);
       }
+      pushNotification('success', `Table "${name}" dropped.`);
       refreshTables();
     } catch (e) {
       setError(e.message);
+      pushNotification('error', e.message);
     }
   };
 
-  // -- Execute SQL --
-  const handleExecute = async (sql, columnSizes) => {
+  const pushNotification = (kind, text) => {
+    setNotifications((prev) => [
+      { kind, text, time: new Date().toLocaleTimeString() },
+      ...prev,
+    ].slice(0, 50));
+  };
+
+  const handleExecute = async (sqlText, columnSizes) => {
     setError(null);
     setSuccessMsg(null);
     setLoading(true);
     try {
-      const data = await runQuery(sql, columnSizes);
+      const data = await runQuery(sqlText, columnSizes);
       if (data.rows && data.rows.length > 0) {
         setResults(data.rows);
         setStats(data.stats || null);
@@ -104,18 +119,16 @@ export default function App() {
         setResults(null);
         setStats(data.stats || null);
 
-        // Build a useful success message
-        const upper = sql.trim().toUpperCase();
-        if (upper.startsWith('INSERT')) {
-          setSuccessMsg('Row inserted successfully.');
-        } else if (upper.startsWith('DELETE')) {
-          setSuccessMsg('Delete executed successfully.');
-        } else if (upper.startsWith('CREATE')) {
-          setSuccessMsg(`Table "${data.table}" created successfully.`);
-        } else {
-          setSuccessMsg('Query executed successfully. 0 rows returned.');
-        }
-        setActiveTab('results');
+        const upper = sqlText.trim().toUpperCase();
+        let msg;
+        if (upper.startsWith('INSERT')) msg = 'Row inserted successfully.';
+        else if (upper.startsWith('DELETE')) msg = 'Delete executed successfully.';
+        else if (upper.startsWith('CREATE')) msg = `Table "${data.table}" created successfully.`;
+        else msg = 'Query executed successfully. 0 rows returned.';
+
+        setSuccessMsg(msg);
+        pushNotification('success', msg);
+        setActiveTab('messages');
         if (data.table) refreshTables();
       }
     } catch (e) {
@@ -123,95 +136,122 @@ export default function App() {
       setResults(null);
       setStats(null);
       setSuccessMsg(null);
+      pushNotification('error', e.message);
+      setActiveTab('messages');
     } finally {
       setLoading(false);
     }
   };
 
+  const toggleMaximize = (which) => {
+    setMaximized((prev) => (prev === which ? null : which));
+  };
+
+  const showEditor = maximized !== 'bottom';
+  const showBottom = maximized !== 'editor';
+  const showResize = showEditor && showBottom;
+  const totalRows = results?.length ?? 0;
+
   return (
-    <div className="flex h-screen overflow-hidden bg-bg-primary" ref={containerRef}>
-      {/* Sidebar */}
-      <Sidebar
-        tables={tables}
-        selectedTable={selectedTable}
-        tableInfo={tableInfo}
-        onSelectTable={handleSelectTable}
-        onDropTable={handleDropTable}
-        onCreateTable={() => setShowCreateModal(true)}
-        onRefresh={refreshTables}
-      />
+    <div className="flex flex-col h-screen overflow-hidden bg-bg-primary">
+      <div className="flex flex-1 min-h-0 overflow-hidden" ref={containerRef}>
+        {/* Sidebar */}
+        <Sidebar
+          tables={tables}
+          selectedTable={selectedTable}
+          tableInfo={tableInfo}
+          onSelectTable={handleSelectTable}
+          onDropTable={handleDropTable}
+          onCreateTable={() => setShowCreateModal(true)}
+          onRefresh={refreshTables}
+        />
 
-      {/* Main area */}
-      <div className="flex flex-col flex-1 min-w-0">
-        {/* Query editor */}
-        <div style={{ height: editorHeight, minHeight: 80, flexShrink: 0 }}>
-          <QueryEditor
-            onExecute={handleExecute}
-            loading={loading}
-            selectedTable={selectedTable}
-          />
-        </div>
-
-        {/* Resize handle */}
-        <div
-          onMouseDown={onMouseDown}
-          className="h-1.5 bg-bg-secondary border-y border-border cursor-row-resize hover:bg-accent/20 active:bg-accent/30 transition-colors flex items-center justify-center"
-        >
-          <div className="w-10 h-0.5 rounded bg-border" />
-        </div>
-
-        {/* Bottom panels */}
-        <div className="flex flex-col flex-1 min-h-0">
-          {/* Tab bar */}
-          <div className="flex items-center gap-6 bg-bg-primary border-b border-border px-4">
-            {['results', 'inspector', 'messages'].map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`px-1 py-2.5 text-[14px] font-medium tracking-wide transition-colors relative ${
-                  activeTab === tab
-                    ? 'text-accent'
-                    : 'text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {tab === 'results' ? 'Data output' : tab === 'inspector' ? 'Properties' : 'Messages'}
-                {activeTab === tab && (
-                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent" />
-                )}
-              </button>
-            ))}
-
-            {stats && <StatsBar stats={stats} />}
-          </div>
-
-          {/* Tab content */}
-          <div className="flex-1 overflow-auto">
-            {activeTab === 'results' && (
-              <ResultsPanel
-                results={results}
-                error={error}
+        {/* Main area */}
+        <div className="flex flex-col flex-1 min-w-0">
+          {/* Query editor */}
+          {showEditor && (
+            <div
+              style={{
+                height: maximized === 'editor' ? '100%' : editorHeight,
+                minHeight: 80,
+                flexShrink: 0,
+              }}
+            >
+              <QueryEditor
+                onExecute={handleExecute}
                 loading={loading}
-                successMsg={successMsg}
+                onCursorChange={setCursor}
+                onToggleMaximize={() => toggleMaximize('editor')}
+                isMaximized={maximized === 'editor'}
               />
-            )}
-            {activeTab === 'inspector' && (
-              <TableInspector
-                tableInfo={tableInfo}
-                tableName={selectedTable}
-              />
-            )}
-            {activeTab === 'messages' && (
-              <div className="p-4 animate-fade-in">
-                {error ? (
-                  <div className="bg-error-subtle border border-error/20 rounded-lg p-3 text-error text-sm font-mono">
-                    {error}
-                  </div>
-                ) : (
-                  <p className="text-text-muted text-sm">No messages.</p>
+            </div>
+          )}
+
+          {/* Resize handle */}
+          {showResize && (
+            <div
+              onMouseDown={onMouseDown}
+              className="h-1.5 bg-bg-secondary border-y border-border cursor-row-resize hover:bg-accent/20 active:bg-accent/30 transition-colors flex items-center justify-center shrink-0"
+            >
+              <div className="w-10 h-0.5 rounded bg-border" />
+            </div>
+          )}
+
+          {/* Bottom panel */}
+          {showBottom && (
+            <div className="flex flex-col flex-1 min-h-0">
+              {/* Tab bar */}
+              <div className="flex items-stretch bg-bg-primary border-b border-border h-9 shrink-0">
+                {BOTTOM_TABS.map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`relative px-4 text-[13px] transition-colors ${
+                      activeTab === tab.id
+                        ? 'text-text-primary'
+                        : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                  >
+                    {tab.label}
+                    {activeTab === tab.id && (
+                      <span className="absolute bottom-0 left-4 right-4 h-px bg-text-primary" />
+                    )}
+                  </button>
+                ))}
+                <div className="ml-auto flex items-center pr-2">
+                  <button
+                    onClick={() => toggleMaximize('bottom')}
+                    className="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+                    title={maximized === 'bottom' ? 'Restore' : 'Maximize'}
+                  >
+                    {maximized === 'bottom' ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Tab content */}
+              <div className="flex-1 overflow-auto">
+                {activeTab === 'results' && (
+                  <ResultsPanel results={results} loading={loading} />
+                )}
+                {activeTab === 'messages' && (
+                  <MessagesPanel error={error} successMsg={successMsg} stats={stats} />
+                )}
+                {activeTab === 'notifications' && (
+                  <NotificationsPanel notifications={notifications} />
                 )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom status bar */}
+      <div className="flex items-center bg-bg-secondary border-t border-border px-3 text-[11px] text-text-muted shrink-0 h-6 select-none">
+        <span>Total rows:{results ? ` ${totalRows}` : ''}</span>
+        <div className="ml-auto flex items-center gap-4">
+          <span>LF</span>
+          <span>Ln {cursor.line}, Col {cursor.col}</span>
         </div>
       </div>
 
@@ -219,12 +259,70 @@ export default function App() {
       {showCreateModal && (
         <CreateTableModal
           onClose={() => setShowCreateModal(false)}
-          onExecute={(sql, sizes) => {
-            handleExecute(sql, sizes);
+          onExecute={(sqlText, sizes) => {
+            handleExecute(sqlText, sizes);
             setShowCreateModal(false);
           }}
         />
       )}
+    </div>
+  );
+}
+
+// -- Inline panels -----------------------------------------------------------
+
+function MessagesPanel({ error, successMsg, stats }) {
+  if (!error && !successMsg && !stats) {
+    return <p className="p-3 text-xs text-text-muted">No messages.</p>;
+  }
+  return (
+    <div className="p-3 space-y-2 animate-fade-in">
+      {error && (
+        <div className="flex items-start gap-2 bg-error-subtle border border-error/20 rounded p-2.5">
+          <AlertCircle size={14} className="text-error mt-0.5 shrink-0" />
+          <span className="text-xs text-error font-mono break-all">{error}</span>
+        </div>
+      )}
+      {successMsg && (
+        <div className="flex items-start gap-2 bg-success-subtle border border-success/20 rounded p-2.5">
+          <CheckCircle2 size={14} className="text-success mt-0.5 shrink-0" />
+          <span className="text-xs text-success">{successMsg}</span>
+        </div>
+      )}
+      {stats && (
+        <div className="bg-bg-secondary border border-border/40 rounded p-2.5">
+          <StatsBar stats={stats} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationsPanel({ notifications }) {
+  if (notifications.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full py-12 text-text-muted">
+        <Info size={24} className="mb-2 opacity-30" />
+        <p className="text-xs">No notifications.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="animate-fade-in">
+      {notifications.map((n, i) => (
+        <div
+          key={i}
+          className="flex items-start gap-2 px-3 py-2 border-b border-border/40"
+        >
+          {n.kind === 'error' ? (
+            <AlertCircle size={13} className="text-error mt-0.5 shrink-0" />
+          ) : (
+            <CheckCircle2 size={13} className="text-success mt-0.5 shrink-0" />
+          )}
+          <span className="text-xs text-text-muted shrink-0 font-mono">{n.time}</span>
+          <span className="text-xs text-text-primary break-all">{n.text}</span>
+        </div>
+      ))}
     </div>
   );
 }

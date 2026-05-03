@@ -1,6 +1,6 @@
-import { TableIcon, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
-export default function ResultsPanel({ results, error, loading, successMsg }) {
+export default function ResultsPanel({ results, loading }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full py-16">
@@ -10,36 +10,8 @@ export default function ResultsPanel({ results, error, loading, successMsg }) {
     );
   }
 
-  if (error) {
-    return (
-      <div className="p-4 animate-fade-in">
-        <div className="flex items-start gap-2 bg-error-subtle border border-error/20 rounded-lg p-3">
-          <AlertCircle size={16} className="text-error mt-0.5 shrink-0" />
-          <span className="text-sm text-error font-mono">{error}</span>
-        </div>
-      </div>
-    );
-  }
-
-  // Success message (INSERT, DELETE, CREATE)
-  if (successMsg && (!results || results.length === 0)) {
-    return (
-      <div className="p-4 animate-fade-in">
-        <div className="flex items-start gap-2 bg-success-subtle border border-success/20 rounded-lg p-3">
-          <CheckCircle2 size={16} className="text-success mt-0.5 shrink-0" />
-          <span className="text-sm text-success">{successMsg}</span>
-        </div>
-      </div>
-    );
-  }
-
   if (!results || results.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full py-16 text-text-muted">
-        <TableIcon size={32} className="mb-2 opacity-30" />
-        <p className="text-sm">No data output. Execute a query to get output.</p>
-      </div>
-    );
+    return <div className="h-full" />;
   }
 
   const columns = Object.keys(results[0]);
@@ -87,10 +59,6 @@ export default function ResultsPanel({ results, error, loading, successMsg }) {
         </tbody>
       </table>
 
-      {/* Row count footer */}
-      <div className="sticky bottom-0 bg-bg-secondary border-t border-border px-3 py-1.5 text-xs text-text-muted">
-        {results.length} row{results.length !== 1 ? 's' : ''} returned
-      </div>
     </div>
   );
 }

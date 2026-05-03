@@ -127,24 +127,20 @@ export default function Sidebar({
                   <div className="flex flex-col">
                     <div className="flex items-center gap-2 text-sm text-text-muted py-1 pl-8 hover:bg-bg-hover cursor-pointer transition-colors">
                       <Columns3 size={14} className="text-text-secondary shrink-0" />
-                      <span className="font-medium text-text-primary text-xs">Columns</span>
+                      <span className="font-medium text-text-primary text-sm">Columns</span>
                     </div>
                     
                     <div className="flex flex-col mt-0.5">
-                      {columns.length > 0 ? (
-                        columns.map((col, i) => (
-                          <div key={i} className="flex items-center gap-2 py-1 pl-[52px] text-sm text-text-secondary hover:bg-bg-hover cursor-pointer transition-colors">
-                            {col.name === keyCol
-                              ? <Key size={13} className="text-warning shrink-0" />
-                              : <span className="w-3.5 shrink-0" />
-                            }
-                            <span className="text-text-primary">{col.name}</span>
-                            <span className="text-text-muted">({col.type || 'TEXT'})</span>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="pl-[52px] py-1 text-sm text-text-muted italic">Loading...</p>
-                      )}
+                      {columns.map((col, i) => (
+                        <div key={i} className="flex items-center gap-2 py-1 pl-[52px] text-sm text-text-secondary hover:bg-bg-hover cursor-pointer transition-colors">
+                          {col.name === keyCol
+                            ? <Key size={13} className="text-warning shrink-0" />
+                            : <span className="w-3.5 shrink-0" />
+                          }
+                          <span className="text-text-primary">{col.name}</span>
+                          <span className="text-text-muted">({col.type || 'TEXT'})</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
@@ -152,19 +148,17 @@ export default function Sidebar({
                   <div className="flex flex-col mt-1">
                     <div className="flex items-center gap-2 text-sm text-text-muted py-1 pl-8 hover:bg-bg-hover cursor-pointer transition-colors">
                       <Hash size={14} className="text-text-secondary shrink-0" />
-                      <span className="font-medium text-text-primary">Indexes</span>
+                      <span className="font-medium text-text-primary text-sm">Indexes</span>
                     </div>
                     
                     <div className="flex flex-col mt-0.5">
-                      {indexType ? (
+                      {indexType && (
                         <div className="flex items-center gap-2 py-1 pl-[52px] text-sm text-text-secondary hover:bg-bg-hover cursor-pointer transition-colors">
                           <span className="w-3.5 shrink-0" />
                           <span className="text-text-primary capitalize">{indexType.toLowerCase()}</span>
                           <span className="text-text-muted">on</span>
                           <span className="text-text-primary">{keyCol || '?'}</span>
                         </div>
-                      ) : (
-                        <p className="pl-[52px] py-1 text-sm text-text-muted italic">Loading...</p>
                       )}
                     </div>
                   </div>
