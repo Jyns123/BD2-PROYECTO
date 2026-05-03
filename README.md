@@ -11,7 +11,7 @@ Sistema de indexación sobre memoria secundaria que implementa desde cero las es
 |--------|--------|
 | Jyns Ordóñez | — |
 | Denzel Bautista | — |
-| — | — |
+| Gian Aedo | — |
 
 ---
 
