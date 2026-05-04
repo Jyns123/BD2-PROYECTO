@@ -1,7 +1,5 @@
 """
-test_all.py
-
-Suite completa de tests para:
+test completa de tests para:
   - DiskManager
   - HeapFile
   - BPlusTree
@@ -10,10 +8,6 @@ Suite completa de tests para:
   - Engine
   - MetricsLogger
   - RTree
-
-Ejecutar:
-    python -m pytest test_all.py -v
-    python test_all.py          # sin pytest
 """
 
 import os
@@ -26,8 +20,8 @@ import pytest
 # HELPERS COMPARTIDOS
 # -------------------------------------------------------
 
-RECORD_SIZE    = 40   # 4 bytes key + 36 bytes padding
-RECORD_SIZE_RT = 12   # 4 bytes id + 4 bytes x + 4 bytes y (RTree)
+RECORD_SIZE    = 40  
+RECORD_SIZE_RT = 12   
 
 def make_record(key: int) -> bytes:
     return struct.pack(">I", key) + b"\x00" * (RECORD_SIZE - 4)
@@ -52,9 +46,7 @@ def tmp_path(suffix=".db"):
     return path
 
 
-# =======================================================
 # 1. DISK MANAGER
-# =======================================================
 
 class TestDiskManager:
     def setup_method(self):
@@ -143,9 +135,7 @@ class TestDiskManager:
         dm.close()
 
 
-# =======================================================
 # 2. HEAP FILE
-# =======================================================
 
 class TestHeapFile:
     def setup_method(self):
@@ -190,9 +180,7 @@ class TestHeapFile:
         assert len(self.heap.scan()) == 200
 
 
-# =======================================================
 # 3. B+ TREE
-# =======================================================
 
 class TestBPlusTree:
     def setup_method(self):
@@ -291,9 +279,7 @@ class TestBPlusTree:
         tree2.close()
 
 
-# =======================================================
 # 4. EXTENDIBLE HASHING
-# =======================================================
 
 class TestExtendibleHash:
     def setup_method(self):
@@ -349,9 +335,9 @@ class TestExtendibleHash:
         assert reads_500 < reads_10 * 20
 
 
-# =======================================================
+
 # 5. SEQUENTIAL FILE
-# =======================================================
+
 
 class TestSequentialFile:
     def setup_method(self):
@@ -414,9 +400,9 @@ class TestSequentialFile:
         assert self.seq._overflow_count == 0
 
 
-# =======================================================
+
 # 6. ENGINE
-# =======================================================
+
 
 class TestEngine:
     def setup_method(self):
@@ -516,9 +502,9 @@ class TestEngine:
         self.engine.close()
 
 
-# =======================================================
+
 # 7. METRICAS
-# =======================================================
+
 
 class TestMetricsLogger:
     def setup_method(self):
@@ -574,9 +560,9 @@ class TestMetricsLogger:
         assert len(logger.entries) == 5
 
 
-# =======================================================
+
 # 8. R-TREE
-# =======================================================
+
 
 class TestRTree:
     def setup_method(self):
