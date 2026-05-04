@@ -10,7 +10,6 @@ class LockManager:
     """
 
     def __init__(self):
-        # resource -> { 'mode': 'NONE'|'S'|'X', 'holders': set(tx_id), 'cond': Condition }
         self._locks = {}
         self._global_lock = threading.Lock()
 
@@ -45,23 +44,19 @@ class LockManager:
         with cond:
             start = time.time()
             while True:
-                # if no one holds it -> grant X
                 if entry["mode"] == "NONE":
                     entry["mode"] = "X"
                     entry["holders"] = {tx_id}
                     return True
 
-                # if currently S and only holder is tx_id -> upgrade
                 if entry["mode"] == "S" and entry["holders"] == {tx_id}:
                     entry["mode"] = "X"
                     entry["holders"] = {tx_id}
                     return True
 
-                # if already X and held by tx_id -> reentrant grant
                 if entry["mode"] == "X" and entry["holders"] == {tx_id}:
                     return True
 
-                # otherwise wait
                 if timeout is not None:
                     remaining = timeout - (time.time() - start)
                     if remaining <= 0:
@@ -81,7 +76,6 @@ class LockManager:
             cond.notify_all()
 
     def release_all(self, tx_id):
-        # Copiamos claves porque release modifica _locks
         with self._global_lock:
             resources = list(self._locks.keys())
         for r in resources:

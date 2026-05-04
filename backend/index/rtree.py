@@ -32,22 +32,15 @@ import math
 import heapq
 from storage.disk_manager import DiskManager, PAGE_SIZE
 
-# -------------------------------------------------------
 # LAYOUT DE SERIALIZACIÓN
-# -------------------------------------------------------
-# Nodo interno: cada entrada = min_x, min_y, max_x, max_y (4×f32) + child_id (i32)
 INTERNAL_ENTRY_SIZE = 4 * 4 + 4   # 20 bytes
 
-# Nodo hoja: cada entrada = x, y (2×f32) + record
 LEAF_COORD_SIZE = 4 * 2            # 8 bytes
 
-# Header de página: is_leaf (1) + n_entries (4) = 5 bytes
 PAGE_HEADER = 5
 
 
-# -------------------------------------------------------
 # MBR (Minimum Bounding Rectangle)
-# -------------------------------------------------------
 class MBR:
     __slots__ = ["min_x", "min_y", "max_x", "max_y"]
 
@@ -99,9 +92,7 @@ class MBR:
         return cls(min_x, min_y, max_x, max_y)
 
 
-# -------------------------------------------------------
 # NODE (en memoria)
-# -------------------------------------------------------
 class RNode:
     def __init__(self, is_leaf):
         self.is_leaf = is_leaf
@@ -110,9 +101,7 @@ class RNode:
         self.entries = []
 
 
-# -------------------------------------------------------
 # R-TREE
-# -------------------------------------------------------
 class RTree:
     def __init__(self, file_path: str, record_size: int, point_extractor):
         """
@@ -124,11 +113,10 @@ class RTree:
         self.record_size = record_size
         self.point_extractor = point_extractor
 
-        # Capacidad máxima por nodo
         avail = PAGE_SIZE - PAGE_HEADER
         self.M_leaf     = avail // (LEAF_COORD_SIZE + record_size)
         self.M_internal = avail // INTERNAL_ENTRY_SIZE
-        self.m_leaf     = max(1, self.M_leaf // 2)      # mínimo (para split)
+        self.m_leaf     = max(1, self.M_leaf // 2)     
         self.m_internal = max(1, self.M_internal // 2)
 
         # Root
@@ -139,9 +127,7 @@ class RTree:
         else:
             self.root = self.dm.get_root()
 
-    # -------------------------------------------------------
     # SERIALIZACIÓN
-    # -------------------------------------------------------
 
     def _serialize(self, node: RNode) -> bytes:
         data = bytearray(PAGE_SIZE)
@@ -187,9 +173,7 @@ class RTree:
 
         return node
 
-    # -------------------------------------------------------
     # I/O
-    # -------------------------------------------------------
 
     def _read_node(self, page_id: int) -> RNode:
         return self._deserialize(self.dm.read_page(page_id))
@@ -207,9 +191,7 @@ class RTree:
         self._write_node(pid, RNode(is_leaf=False))
         return pid
 
-    # -------------------------------------------------------
     # MBR HELPERS
-    # -------------------------------------------------------
 
     def _mbr_of_node(self, node: RNode) -> MBR:
         if node.is_leaf:
@@ -223,16 +205,13 @@ class RTree:
     def _mbr_of_page(self, page_id: int) -> MBR:
         return self._mbr_of_node(self._read_node(page_id))
 
-    # -------------------------------------------------------
     # INSERT
-    # -------------------------------------------------------
 
     def insert(self, record: bytes):
         x, y = self.point_extractor(record)
         result = self._insert_recursive(self.root, x, y, record)
 
         if result is not None:
-            # El root se splitió → crear nueva raíz
             new_mbr_left, new_mbr_right, right_pid = result
             new_root = RNode(is_leaf=False)
             new_root.entries = [
@@ -261,20 +240,17 @@ class RTree:
             return self._split_leaf(page_id, node)
 
         else:
-            # Elegir hijo con menor agrandamiento de MBR
             best_i = self._choose_subtree(node, x, y)
             best_child_pid = node.entries[best_i][1]
 
             result = self._insert_recursive(best_child_pid, x, y, record)
 
             if result is None:
-                # Actualizar MBR del hijo en este nodo
                 new_child_mbr = self._mbr_of_page(best_child_pid)
                 node.entries[best_i] = (new_child_mbr, best_child_pid)
                 self._write_node(page_id, node)
                 return None
 
-            # Hubo split en el hijo
             mbr_left, mbr_right, right_pid = result
             node.entries[best_i] = (mbr_left, best_child_pid)
             node.entries.append((mbr_right, right_pid))
@@ -302,9 +278,8 @@ class RTree:
 
         return best_i
 
-    # -------------------------------------------------------
     # SPLIT
-    # -------------------------------------------------------
+    
 
     def _split_leaf(self, page_id, node: RNode):
         left_entries, right_entries = self._linear_split_entries(
@@ -356,7 +331,6 @@ class RTree:
         n = len(entries)
         mid = n // 2
 
-        # Ordenar por coordenada X del centroide para el split
         sorted_entries = sorted(entries, key=lambda e: key_fn(e)[0])
 
         left  = sorted_entries[:mid]
@@ -364,9 +338,7 @@ class RTree:
 
         return left, right
 
-    # -------------------------------------------------------
     # RANGE SEARCH
-    # -------------------------------------------------------
 
     def range_search(self, cx: float, cy: float, r: float) -> list:
         """
@@ -390,23 +362,19 @@ class RTree:
                 if mbr.intersects_circle(cx, cy, r):
                     self._range_recursive(child_id, cx, cy, r, results)
 
-    # -------------------------------------------------------
     # KNN
-    # -------------------------------------------------------
+    
 
     def knn(self, cx: float, cy: float, k: int) -> list:
         """
         Retorna los k registros más cercanos al punto (cx, cy).
         Usa Best-First Search con min-heap sobre distancia mínima al MBR.
         """
-        # heap: (min_dist, is_leaf_flag, page_id_or_entry)
-        # Para nodos: (dist_to_mbr, 0, page_id)
-        # Para puntos: (dist_to_point, 1, record)
+  
 
         heap = []
         results = []
 
-        # distancia mínima del root al punto
         root_node = self._read_node(self.root)
         root_mbr  = self._mbr_of_node(root_node)
         heapq.heappush(heap, (root_mbr.min_dist_to_point(cx, cy), 0, self.root))
@@ -415,11 +383,9 @@ class RTree:
             dist, entry_type, payload = heapq.heappop(heap)
 
             if entry_type == 1:
-                # Es un registro (hoja)
                 results.append(payload)
                 continue
 
-            # Es un nodo
             node = self._read_node(payload)
 
             if node.is_leaf:
@@ -433,16 +399,13 @@ class RTree:
 
         return results
 
-    # -------------------------------------------------------
     # STATS
-    # -------------------------------------------------------
 
     def get_stats(self):
         return self.dm.get_stats()
 
-    # -------------------------------------------------------
     # CLOSE
-    # -------------------------------------------------------
+    
 
     def close(self):
         self.dm.close()

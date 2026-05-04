@@ -1,5 +1,3 @@
-# index/sequential.py
-
 import os
 import heapq
 import shutil
@@ -26,17 +24,11 @@ class SequentialFile:
         self.main = HeapFile(self.main_dm, record_size)
         self.overflow = HeapFile(self.overflow_dm, record_size)
 
-        # FIX: exponer un dm unificado para que el benchmark/engine
-        # pueda hacer reset_stats() y get_stats() en un solo punto
         self.dm = self._UnifiedDM(self.main_dm, self.overflow_dm)
 
-        # FIX: umbral de rebuild configurable
         self.overflow_limit = 200
         self._overflow_count = 0
 
-    # -------------------------
-    # DM UNIFICADO (inner class)
-    # -------------------------
     class _UnifiedDM:
         """Suma reads/writes de main y overflow para métricas consistentes."""
         def __init__(self, main_dm, overflow_dm):
@@ -61,9 +53,6 @@ class SequentialFile:
         def write_count(self):
             return self._main.write_count + self._overflow.write_count
 
-    # -----------------------------
-    # INSERT → overflow
-    # -----------------------------
     def insert(self, record: bytes):
         if not isinstance(record, (bytes, bytearray)):
             raise ValueError("record debe ser bytes")
@@ -73,29 +62,21 @@ class SequentialFile:
         self.overflow.insert(record)
         self._overflow_count += 1
 
-        # FIX: resetear ANTES de incrementar para que el rebuild
-        # no cuente el registro que acaba de entrar
         if self._overflow_count >= self.overflow_limit:
             self.rebuild()
-            # _overflow_count ya se resetea a 0 dentro de rebuild()
-            # pero el registro actual ya fue insertado antes del rebuild,
-            # así que el conteo es correcto
+   
 
-    # -----------------------------
     # SEARCH
-    # -----------------------------
     def search(self, key_value):
         results = []
         try:
-            # FIX: early exit en main si clave ya pasó (está ordenado)
             for r in self.main.scan():
                 k = self.key(r)
                 if k == key_value:
                     results.append(r)
                 elif k > key_value:
-                    break  # main está ordenado → no puede haber más
+                    break  
 
-            # overflow siempre full scan (no está ordenado)
             for r in self.overflow.scan():
                 if self.key(r) == key_value:
                     results.append(r)
@@ -104,9 +85,7 @@ class SequentialFile:
         except Exception as e:
             raise IOError(f"Error en search: {e}")
 
-    # -----------------------------
     # RANGE SEARCH
-    # -----------------------------
     def range_search(self, begin, end):
         results = []
         try:
@@ -128,9 +107,7 @@ class SequentialFile:
         except Exception as e:
             raise IOError(f"Error en range_search: {e}")
 
-    # -----------------------------
     # REBUILD
-    # -----------------------------
     def rebuild(self):
         temp_dir = os.path.join(os.path.dirname(self.main_path), "seq_tmp")
         main_tmp = self.main_path + ".tmp"
@@ -262,9 +239,7 @@ class SequentialFile:
 
         return generator()
 
-    # -----------------------------
     # REMOVE
-    # -----------------------------
     def remove(self, key_value):
         removed_main = 0
         removed_overflow = 0
@@ -347,9 +322,7 @@ class SequentialFile:
                     os.remove(tmp_path)
             raise IOError(f"Error en remove: {e}")
 
-    # -----------------------------
     # CLOSE
-    # -----------------------------
     def close(self):
         try:
             self.main_dm.close()

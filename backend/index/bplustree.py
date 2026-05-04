@@ -20,13 +20,11 @@ class BPlusTree:
 
         if self.dm._get_total_pages() == 1:
             self.root = self._new_leaf()
-            self.dm.set_root(self.root)      # persistir root inicial
+            self.dm.set_root(self.root)      
         else:
-            self.root = self.dm.get_root()   # leer root real desde metadata
+            self.root = self.dm.get_root()   
 
-    # -------------------------
     # SERIALIZACIÓN
-    # -------------------------
 
     def _serialize(self, node):
         data = bytearray(PAGE_SIZE)
@@ -83,9 +81,8 @@ class BPlusTree:
 
         return node
 
-    # -------------------------
+    
     # IO
-    # -------------------------
 
     def _read_node(self, page_id):
         if page_id in self.cache:
@@ -111,12 +108,10 @@ class BPlusTree:
         self._write_node(pid, node)
         return pid
 
-    # -------------------------
     # INSERT
-    # -------------------------
 
     def insert(self, record):
-        self.cache.clear()                           # simular disco real
+        self.cache.clear()                          
         key = self.key_extractor(record)
         split = self._insert_recursive(self.root, key, record)
 
@@ -128,7 +123,7 @@ class BPlusTree:
             root_id = self.dm.allocate_page()
             self._write_node(root_id, new_root)
             self.root = root_id
-            self.dm.set_root(self.root)              # persistir nuevo root
+            self.dm.set_root(self.root)              
 
     def _insert_recursive(self, node_id, key, record):
         node = self._read_node(node_id)
@@ -163,9 +158,7 @@ class BPlusTree:
                 return None
             return self._split_internal(node_id, node)
 
-    # -------------------------
     # SPLIT
-    # -------------------------
 
     def _split_leaf(self, node_id, node):
         mid = len(node.keys) // 2
@@ -206,12 +199,10 @@ class BPlusTree:
 
         return promote, new_id
 
-    # -------------------------
     # SEARCH
-    # -------------------------
 
     def search(self, key):
-        self.cache.clear()                           # simular disco real
+        self.cache.clear()                          
         node_id = self.root
 
         while True:
@@ -245,12 +236,10 @@ class BPlusTree:
                     i += 1
                 node_id = node.children[i]
 
-    # -------------------------
     # RANGE SEARCH
-    # -------------------------
 
     def range_search(self, start, end):
-        self.cache.clear()                           # simular disco real
+        self.cache.clear()                          
         node_id = self.root
 
         while True:
@@ -275,12 +264,10 @@ class BPlusTree:
 
         return res
 
-    # -------------------------
     # REMOVE
-    # -------------------------
 
     def remove(self, key):
-        self.cache.clear()                           # simular disco real
+        self.cache.clear()                          
         path = []
         leaf_id = self._find_leaf_with_path(key, path)
         removed = self._delete_from_leaf(leaf_id, key)
@@ -349,7 +336,6 @@ class BPlusTree:
             left_id = parent.children[idx - 1] if idx > 0 else None
             right_id = parent.children[idx + 1] if idx + 1 < len(parent.children) else None
 
-            # Borrow from left
             if left_id is not None:
                 left = self._read_node(left_id)
                 if len(left.keys) > min_keys:
@@ -370,7 +356,6 @@ class BPlusTree:
                     self._write_node(parent_id, parent)
                     return
 
-            # Borrow from right
             if right_id is not None:
                 right = self._read_node(right_id)
                 if len(right.keys) > min_keys:
@@ -391,7 +376,6 @@ class BPlusTree:
                     self._write_node(parent_id, parent)
                     return
 
-            # Merge
             if left_id is not None:
                 left = self._read_node(left_id)
                 if node.is_leaf:
@@ -432,9 +416,7 @@ class BPlusTree:
                 node_id = parent_id
                 continue
 
-    # -------------------------
     # CLOSE
-    # -------------------------
 
     def close(self):
         self.dm.close()
