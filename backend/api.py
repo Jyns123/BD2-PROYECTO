@@ -3,6 +3,7 @@ import os
 import struct
 import time
 from typing import Any, Dict, List, Optional
+import threading
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -14,6 +15,7 @@ from index.bplustree import BPlusTree
 from index.hash import ExtendibleHash
 from index.sequential import SequentialFile
 from index.rtree import RTree
+from concurrency.lock_manager import LockManager
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 CATALOG_PATH = os.path.join(DATA_DIR, "catalog.json")
@@ -21,6 +23,8 @@ CATALOG_PATH = os.path.join(DATA_DIR, "catalog.json")
 app = FastAPI()
 engine = Engine()
 parser = Parser()
+# Lock manager para coordinar peticiones HTTP concurrentes (locks por tabla)
+lock_manager = LockManager()
 
 
 class QueryRequest(BaseModel):
@@ -185,11 +189,16 @@ def drop_table(name: str):
         raise HTTPException(status_code=404, detail="Tabla no existe")
 
     meta = catalog[name]
-    engine.drop_table(name, base_path=meta.get("base_path", DATA_DIR))
-    del catalog[name]
-    _save_catalog(catalog)
-
-    return {"ok": True, "table": name}
+    # Adquirir lock exclusivo para borrar la tabla
+    tx_id = threading.get_ident()
+    lock_manager.acquire_exclusive(name, tx_id)
+    try:
+        engine.drop_table(name, base_path=meta.get("base_path", DATA_DIR))
+        del catalog[name]
+        _save_catalog(catalog)
+        return {"ok": True, "table": name}
+    finally:
+        lock_manager.release_all(tx_id)
 
 
 @app.post("/query")
@@ -220,20 +229,26 @@ def run_query(req: QueryRequest):
         }
 
         t0 = time.perf_counter()
-        engine.execute(
-            qd,
-            codec.encode,
-            record_size=codec.record_size,
-            key_extractor=codec.key_extractor(key_col),
-            point_extractor=codec.point_extractor() if (meta["index"] or "").upper() == "RTREE" else None,
-            base_path=base_path,
-        )
-        t1 = time.perf_counter()
+        # Adquirir lock exclusivo sobre la tabla a crear para evitar races
+        tx_id = threading.get_ident()
+        lock_manager.acquire_exclusive(qd["table"], tx_id)
+        try:
+            engine.execute(
+                qd,
+                codec.encode,
+                record_size=codec.record_size,
+                key_extractor=codec.key_extractor(key_col),
+                point_extractor=codec.point_extractor() if (meta["index"] or "").upper() == "RTREE" else None,
+                base_path=base_path,
+            )
+            t1 = time.perf_counter()
 
-        catalog[qd["table"]] = meta
-        _save_catalog(catalog)
+            catalog[qd["table"]] = meta
+            _save_catalog(catalog)
 
-        return {"ok": True, "table": qd["table"], "time_ms": (t1 - t0) * 1000}
+            return {"ok": True, "table": qd["table"], "time_ms": (t1 - t0) * 1000}
+        finally:
+            lock_manager.release_all(tx_id)
 
     if qtype in ("SELECT", "SELECT_ALL", "INSERT", "DELETE"):
         table = qd.get("table")
@@ -243,16 +258,32 @@ def run_query(req: QueryRequest):
         meta = catalog[table]
         columns = meta.get("columns", [])
         codec = Codec(columns, meta.get("column_sizes") or {})
-        _get_or_open_table(table, meta)
 
-        t0 = time.perf_counter()
-        results, stats = engine.execute(qd, codec.encode)
-        t1 = time.perf_counter()
+        # Determinar modo de lock: lectura compartida para SELECTs, exclusivo para escrituras
+        mode = "S"
+        if qtype in ("INSERT", "DELETE"):
+            mode = "X"
 
-        if results is None:
-            return {"ok": True, "rows": [], "stats": {**stats, "time_ms": (t1 - t0) * 1000}}
+        tx_id = threading.get_ident()
+        if mode == "S":
+            lock_manager.acquire_shared(table, tx_id)
+        else:
+            lock_manager.acquire_exclusive(table, tx_id)
 
-        rows = [codec.decode(r) for r in results]
-        return {"ok": True, "rows": rows, "stats": {**stats, "time_ms": (t1 - t0) * 1000}}
+        try:
+            # Abrir tabla (si no está en memoria) *con* el lock ya adquirido
+            _get_or_open_table(table, meta)
+
+            t0 = time.perf_counter()
+            results, stats = engine.execute(qd, codec.encode)
+            t1 = time.perf_counter()
+
+            if results is None:
+                return {"ok": True, "rows": [], "stats": {**stats, "time_ms": (t1 - t0) * 1000}}
+
+            rows = [codec.decode(r) for r in results]
+            return {"ok": True, "rows": rows, "stats": {**stats, "time_ms": (t1 - t0) * 1000}}
+        finally:
+            lock_manager.release_all(tx_id)
 
     raise HTTPException(status_code=400, detail="Query no soportada")
