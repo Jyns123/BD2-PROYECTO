@@ -6,9 +6,9 @@ class Engine:
     def __init__(self):
         self.tables = {}
 
-    # -------------------------
+    
     # CREATE TABLE
-    # -------------------------
+    
 
     def create_table(self, name, file_path, record_size, key_extractor):
         if name in self.tables:
@@ -21,9 +21,9 @@ class Engine:
             "file": file_path
         }
 
-    # -------------------------
+    
     # INSERT
-    # -------------------------
+    
 
     def insert(self, table, record):
         if table not in self.tables:
@@ -39,9 +39,9 @@ class Engine:
             "time_ms": (t1 - t0) * 1000
         }
 
-    # -------------------------
+    
     # SEARCH (=)
-    # -------------------------
+    
 
     def search(self, table, key):
         if table not in self.tables:
@@ -62,9 +62,9 @@ class Engine:
             "writes": stats["writes"]
         }
 
-    # -------------------------
+    
     # RANGE SEARCH
-    # -------------------------
+    
 
     def range_search(self, table, start, end):
         if table not in self.tables:
@@ -85,9 +85,9 @@ class Engine:
             "writes": stats["writes"]
         }
 
-    # -------------------------
+    
     # CLOSE
-    # -------------------------
+    
 
     def close(self):
         for t in self.tables.values():

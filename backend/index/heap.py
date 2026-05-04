@@ -11,11 +11,9 @@ class HeapFile:
 
         self.dm = disk_manager
         self.record_size = record_size
-        self._free_page = None  # FIX: cache de la última página con espacio
+        self._free_page = None  
 
-    # -----------------------------
     # INSERT
-    # -----------------------------
     def insert(self, record: bytes):
         if not isinstance(record, (bytes, bytearray)):
             raise ValueError("record debe ser bytes")
@@ -23,7 +21,6 @@ class HeapFile:
             raise ValueError("tamaño de record incorrecto")
 
         try:
-            # FIX: intentar última página conocida con espacio primero
             if self._free_page is not None:
                 raw = self.dm.read_page(self._free_page)
                 page = Page.from_bytes(raw, self.record_size)
@@ -32,7 +29,6 @@ class HeapFile:
                     self.dm.write_page(self._free_page, page.to_bytes())
                     return self._free_page
 
-            # FIX: si no, buscar desde el final hacia atrás (más probable encontrar espacio)
             total_pages = self.dm._get_total_pages()
             for page_id in range(total_pages - 1, 0, -1):
                 raw = self.dm.read_page(page_id)
@@ -43,7 +39,6 @@ class HeapFile:
                     self._free_page = page_id
                     return page_id
 
-            # no hay espacio → nueva página
             new_page_id = self.dm.allocate_page()
             page = Page(self.record_size)
             page.insert_record(record)
@@ -54,9 +49,7 @@ class HeapFile:
         except Exception as e:
             raise IOError(f"Error en insert: {e}")
 
-    # -----------------------------
     # SCAN
-    # -----------------------------
     def scan(self) -> list:
         results = []
         try:
@@ -69,9 +62,7 @@ class HeapFile:
         except Exception as e:
             raise IOError(f"Error en scan: {e}")
 
-    # -----------------------------
     # SEARCH
-    # -----------------------------
     def search(self, predicate) -> list:
         if not callable(predicate):
             raise ValueError("predicate debe ser una función")
