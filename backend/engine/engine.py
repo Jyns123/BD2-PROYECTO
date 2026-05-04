@@ -62,8 +62,25 @@ class Engine:
 
         inserted = 0
         if from_file:
+            # Resolver la ruta del CSV: aceptar ruta absoluta, relativa
+            # o relativa a `base_path` (p. ej. el directorio data del servidor).
+            file_path = from_file
+            if not os.path.isabs(file_path):
+                # Si la ruta relativa no existe desde el working dir,
+                # intentar buscar dentro de `base_path`.
+                if not os.path.exists(file_path):
+                    alt = os.path.join(base_path, file_path)
+                    if os.path.exists(alt):
+                        file_path = alt
+                    else:
+                        # Manejar casos como 'data/students.csv' cuando
+                        # `base_path` ya contiene 'data' (evita doble 'data/').
+                        alt2 = os.path.join(base_path, os.path.basename(file_path))
+                        if os.path.exists(alt2):
+                            file_path = alt2
+
             inserted = CSVLoader.load(
-                from_file,
+                file_path,
                 table,
                 self,
                 row_parser=self._row_parser(columns),

@@ -1,0 +1,60 @@
+{
+  "students": {
+    "columns": [
+      {
+        "name": "id",
+        "type": "INT",
+        "index": "BPLUSTREE"
+      },
+      {
+        "name": "name",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "age",
+        "type": "INT",
+        "index": null
+      }
+    ],
+    "index": "BPLUSTREE",
+    "record_size": 40,
+    "key_column": "id",
+    "column_sizes": {},
+    "base_path": "/Users/denzel/Personal/UTEC/BD2/BD2-PROYECTO/backend/data"
+  },
+  "chipotle": {
+    "columns": [
+      {
+        "name": "latitude",
+        "type": "FLOAT",
+        "index": "RTREE"
+      },
+      {
+        "name": "longitude",
+        "type": "FLOAT",
+        "index": null
+      },
+      {
+        "name": "state",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "location",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "address",
+        "type": "TEXT",
+        "index": null
+      }
+    ],
+    "index": "RTREE",
+    "record_size": 112,
+    "key_column": "latitude",
+    "column_sizes": {},
+    "base_path": "/Users/denzel/Personal/UTEC/BD2/BD2-PROYECTO/backend/data"
+  }
+}
