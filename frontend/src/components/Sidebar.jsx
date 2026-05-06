@@ -112,8 +112,13 @@ export default function Sidebar({
                   {name}
                 </span>
                 <button
-                  onClick={(e) => { e.stopPropagation(); onDropTable(name); }}
-                  className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-error-subtle hover:text-error transition-all"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm(`Drop table "${name}"? This deletes all data.`)) {
+                      onDropTable(name);
+                    }
+                  }}
+                  className="p-1 rounded opacity-60 hover:opacity-100 hover:bg-error-subtle hover:text-error transition-all"
                   title="Drop table"
                 >
                   <Trash2 size={12} />

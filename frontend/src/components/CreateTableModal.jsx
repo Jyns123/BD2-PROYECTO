@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { X, Plus, Trash2, Play } from 'lucide-react';
+import { X, Plus, Trash2, Play, Wand2 } from 'lucide-react';
+import { inferCsv } from '../services/api';
 
-const INDEX_OPTIONS = ['BPLUSTREE', 'HASH', 'SEQUENTIAL', 'RTREE'];
+const INDEX_OPTIONS = ['BPLUSTREE', 'HASH', 'SEQUENTIAL', 'RTREE', 'HEAP'];
 const TYPE_OPTIONS = ['INT', 'FLOAT', 'TEXT'];
 
 export default function CreateTableModal({ onClose, onExecute }) {
@@ -11,6 +12,8 @@ export default function CreateTableModal({ onClose, onExecute }) {
   ]);
   const [csvPath, setCsvPath] = useState('');
   const [columnSizes, setColumnSizes] = useState({});
+  const [inferring, setInferring] = useState(false);
+  const [inferError, setInferError] = useState('');
 
   const addColumn = () =>
     setColumns([...columns, { name: '', type: 'TEXT', index: '' }]);
@@ -26,6 +29,38 @@ export default function CreateTableModal({ onClose, onExecute }) {
 
   const updateSize = (colName, size) => {
     setColumnSizes({ ...columnSizes, [colName]: parseInt(size) || 32 });
+  };
+
+  const detectFromCsv = async () => {
+    setInferError('');
+    if (!csvPath.trim()) {
+      setInferError('Ingresa la ruta del CSV primero');
+      return;
+    }
+    setInferring(true);
+    try {
+      const res = await inferCsv(csvPath.trim());
+      if (!res.columns || res.columns.length === 0) {
+        setInferError('CSV sin columnas detectables');
+        return;
+      }
+      // Importar columnas detectadas (preserva nombre, tipo; index vacío por default)
+      const detected = res.columns.map((c) => ({
+        name: c.name,
+        type: c.type,
+        index: '',
+      }));
+      setColumns(detected);
+      const sizes = {};
+      res.columns.forEach((c) => {
+        if (c.type === 'TEXT' && c.size) sizes[c.name] = c.size;
+      });
+      setColumnSizes(sizes);
+    } catch (e) {
+      setInferError(e.message || 'Error detectando columnas');
+    } finally {
+      setInferring(false);
+    }
   };
 
   const buildSQL = () => {
@@ -150,16 +185,30 @@ export default function CreateTableModal({ onClose, onExecute }) {
 
           {/* CSV path */}
           <div>
-            <label className="block text-[11px] text-text-muted mb-1 font-medium">
-              Load from CSV (optional)
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[11px] text-text-muted font-medium">
+                Load from CSV (optional)
+              </label>
+              <button
+                type="button"
+                onClick={detectFromCsv}
+                disabled={inferring || !csvPath.trim()}
+                className="flex items-center gap-1 text-[10px] text-accent hover:text-accent-hover disabled:opacity-40 transition-colors"
+                title="Auto-detectar columnas desde el header del CSV"
+              >
+                <Wand2 size={11} /> {inferring ? 'Detecting…' : 'Auto-detect columns'}
+              </button>
+            </div>
             <input
               type="text"
               value={csvPath}
-              onChange={(e) => setCsvPath(e.target.value)}
+              onChange={(e) => { setCsvPath(e.target.value); setInferError(''); }}
               placeholder="data/students.csv"
               className="w-full bg-bg-primary border border-border rounded-md px-3 py-1.5 text-sm text-text-primary placeholder-text-muted outline-none focus:border-border-focus transition-colors font-mono"
             />
+            {inferError && (
+              <div className="text-[11px] text-error mt-1">{inferError}</div>
+            )}
           </div>
 
           {/* SQL preview */}

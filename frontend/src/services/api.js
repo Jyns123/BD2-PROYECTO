@@ -17,6 +17,13 @@ export const getTables = () => request('/tables');
 export const getTable = (name) => request(`/tables/${name}`);
 export const dropTable = (name) => request(`/tables/${name}`, { method: 'DELETE' });
 
+// -- CSV inference --
+export const inferCsv = (path, sampleRows = 50) =>
+  request('/infer-csv', {
+    method: 'POST',
+    body: JSON.stringify({ path, sample_rows: sampleRows }),
+  });
+
 // -- Query --
 export const runQuery = (sql, columnSizes = null, basePath = '') =>
   request('/query', {
