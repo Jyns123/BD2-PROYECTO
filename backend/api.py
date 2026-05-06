@@ -2,7 +2,7 @@ import json
 import os
 import struct
 import time
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 import threading
 
 from fastapi import FastAPI, HTTPException
@@ -15,6 +15,7 @@ from index.bplustree import BPlusTree
 from index.hash import ExtendibleHash
 from index.sequential import SequentialFile
 from index.rtree import RTree
+from index.heap import HeapFile
 from concurrency.lock_manager import LockManager
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -60,7 +61,8 @@ class Codec:
         if isinstance(values, (int, float, str)):
             values = [values]
         parts = []
-        for i, (name, col_type, size, _) in enumerate(self.fields):
+        for i, field in enumerate(self.fields):
+            col_type, size = field[1], field[2]
             raw = values[i] if i < len(values) else ""
             if col_type == "INT":
                 parts.append(struct.pack(">i", int(raw) if raw != "" else 0))
@@ -105,8 +107,8 @@ class Codec:
         if len(self.fields) < 2:
             raise Exception("RTREE requiere al menos 2 columnas numericas")
 
-        (n1, t1, s1, o1) = self.fields[0]
-        (n2, t2, s2, o2) = self.fields[1]
+        (_, t1, s1, o1) = self.fields[0]
+        (_, t2, s2, o2) = self.fields[1]
 
         def read_num(col_type, chunk):
             if col_type == "INT":
@@ -148,24 +150,150 @@ def _get_or_open_table(name, meta):
         return
 
     columns = meta.get("columns", [])
-    index_type = (meta.get("index") or "BPLUSTREE").upper()
+    # Tablas creadas sin INDEX caen a HEAP por default
+    index_type = (meta.get("index") or "HEAP").upper()
     column_sizes = meta.get("column_sizes") or {}
     codec = Codec(columns, column_sizes)
     key_col = meta.get("key_column")
 
-    main_path = os.path.join(meta.get("base_path", DATA_DIR), f"{name}.db")
+    main_path = os.path.join(DATA_DIR, f"{name}.db")
 
     if index_type == "SEQUENTIAL":
-        overflow_path = os.path.join(meta.get("base_path", DATA_DIR), f"{name}_overflow.db")
+        overflow_path = os.path.join(DATA_DIR, f"{name}_overflow.db")
         index = SequentialFile(main_path, overflow_path, codec.record_size, codec.key_extractor(key_col))
     elif index_type == "HASH":
         index = ExtendibleHash(main_path, codec.record_size, codec.key_extractor(key_col))
     elif index_type == "RTREE":
         index = RTree(main_path, codec.record_size, codec.point_extractor())
+    elif index_type == "HEAP":
+        index = HeapFile(main_path, codec.record_size, codec.key_extractor(key_col))
     else:
         index = BPlusTree(main_path, codec.record_size, codec.key_extractor(key_col))
 
     engine.create_table(name, index, columns=columns, index_type=index_type)
+
+
+class InferCsvRequest(BaseModel):
+    path: str
+    sample_rows: Optional[int] = 50
+
+
+def _infer_type(values):
+    # Inferencia simple: si todos parsean a int -> INT; si a float -> FLOAT; sino TEXT.
+    # Si no hay ningún valor no-vacío, default TEXT (no asumir INT por columnas en blanco).
+    if not values:
+        return "TEXT"
+    is_int = True
+    is_float = True
+    saw_value = False
+    for v in values:
+        s = (v or "").strip()
+        if s == "":
+            continue
+        saw_value = True
+        try:
+            int(s)
+        except ValueError:
+            is_int = False
+        try:
+            float(s)
+        except ValueError:
+            is_float = False
+        if not is_int and not is_float:
+            break
+    if not saw_value:
+        return "TEXT"
+    if is_int:
+        return "INT"
+    if is_float:
+        return "FLOAT"
+    return "TEXT"
+
+
+def _sanitize_col_name(name: str) -> str:
+    # Reemplazar todo lo que no sea letra/dígito/underscore por _
+    # para evitar romper el tokenizer (que separa por espacios y símbolos).
+    out = []
+    for ch in (name or "").strip():
+        if ch.isalnum() or ch == "_":
+            out.append(ch)
+        else:
+            out.append("_")
+    cleaned = "".join(out).strip("_")
+    if not cleaned:
+        cleaned = "col"
+    # Identificadores no pueden empezar con dígito
+    if cleaned[0].isdigit():
+        cleaned = "c_" + cleaned
+    return cleaned
+
+
+@app.post("/infer-csv")
+def infer_csv(req: InferCsvRequest):
+    # Resolver ruta: absoluta, relativa al cwd, o relativa a DATA_DIR
+    raw = req.path
+    candidates = [raw]
+    if not os.path.isabs(raw):
+        candidates.append(os.path.join(DATA_DIR, raw))
+        candidates.append(os.path.join(DATA_DIR, os.path.basename(raw)))
+
+    file_path = None
+    for c in candidates:
+        if os.path.exists(c):
+            file_path = c
+            break
+    if file_path is None:
+        raise HTTPException(status_code=404, detail=f"CSV no encontrado: {raw}")
+
+    import csv as _csv
+    columns = []
+    try:
+        with open(file_path, mode="r", encoding="utf-8") as f:
+            reader = _csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                raise HTTPException(status_code=400, detail="CSV vacío o sin header")
+
+            samples = [[] for _ in header]
+            max_len = [0 for _ in header]
+            n_rows = 0
+            limit = max(1, int(req.sample_rows or 50))
+            for row in reader:
+                for i in range(len(header)):
+                    val = row[i] if i < len(row) else ""
+                    samples[i].append(val)
+                    if len(val) > max_len[i]:
+                        max_len[i] = len(val)
+                n_rows += 1
+                if n_rows >= limit:
+                    break
+
+            seen_names = set()
+            for i, raw_name in enumerate(header):
+                col_type = _infer_type(samples[i])
+                base = _sanitize_col_name(raw_name)
+                # Asegurar unicidad si dos columnas se sanitizan al mismo nombre
+                name = base
+                suffix = 2
+                while name in seen_names:
+                    name = f"{base}_{suffix}"
+                    suffix += 1
+                seen_names.add(name)
+
+                col = {"name": name, "type": col_type}
+                if name != (raw_name or "").strip():
+                    col["original"] = raw_name
+                if col_type == "TEXT":
+                    # Tamaño sugerido: largo máximo redondeado a múltiplo de 8 (mínimo 16)
+                    size = max(16, ((max_len[i] + 7) // 8) * 8)
+                    col["size"] = size
+                columns.append(col)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error leyendo CSV: {e}")
+
+    return {"columns": columns, "sampled": n_rows}
 
 
 @app.get("/tables")
@@ -188,12 +316,25 @@ def drop_table(name: str):
     if name not in catalog:
         raise HTTPException(status_code=404, detail="Tabla no existe")
 
-    meta = catalog[name]
     # Adquirir lock exclusivo para borrar la tabla
     tx_id = threading.get_ident()
     lock_manager.acquire_exclusive(name, tx_id)
     try:
-        engine.drop_table(name, base_path=meta.get("base_path", DATA_DIR))
+        # Cargar la tabla en memoria si no estaba abierta (post server restart)
+        meta = catalog[name]
+        try:
+            _get_or_open_table(name, meta)
+        except Exception:
+            # si no se puede abrir igual borramos archivos físicos abajo
+            pass
+        try:
+            engine.drop_table(name, base_path=DATA_DIR)
+        except Exception:
+            # cleanup manual de archivos si engine no la tenía
+            for fname in (f"{name}.db", f"{name}_overflow.db", f"{name}.db.dir"):
+                fpath = os.path.join(DATA_DIR, fname)
+                if os.path.exists(fpath):
+                    os.remove(fpath)
         del catalog[name]
         _save_catalog(catalog)
         return {"ok": True, "table": name}
@@ -219,13 +360,19 @@ def run_query(req: QueryRequest):
         key_col = _get_key_column(columns)
         codec = Codec(columns, req.column_sizes)
 
+        # Default sin INDEX explícito: HEAP (tabla sin índice)
+        declared_index = None
+        for col in columns:
+            if col.get("index"):
+                declared_index = col["index"]
+                break
+
         meta = {
             "columns": columns,
-            "index": (columns[0].get("index") if columns else "BPLUSTREE"),
+            "index": (declared_index or "HEAP"),
             "record_size": codec.record_size,
             "key_column": key_col,
             "column_sizes": req.column_sizes or {},
-            "base_path": base_path,
         }
 
         t0 = time.perf_counter()
@@ -275,7 +422,8 @@ def run_query(req: QueryRequest):
             _get_or_open_table(table, meta)
 
             t0 = time.perf_counter()
-            results, stats = engine.execute(qd, codec.encode)
+            # decode se pasa para fallback de WHERE sobre columna no indexada
+            results, stats = engine.execute(qd, codec.encode, decode=codec.decode)
             t1 = time.perf_counter()
 
             if results is None:
