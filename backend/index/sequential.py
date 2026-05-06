@@ -66,6 +66,13 @@ class SequentialFile:
             self.rebuild()
    
 
+    # SCAN (para SELECT *)
+    def scan(self):
+        # main ya está ordenado; overflow puede no estarlo: sort final por key
+        results = list(self.main.scan()) + list(self.overflow.scan())
+        results.sort(key=self.key)
+        return results
+
     # SEARCH
     def search(self, key_value):
         results = []

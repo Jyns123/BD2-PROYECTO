@@ -1,4 +1,3 @@
-import struct
 from storage.disk_manager import DiskManager, PAGE_SIZE
 
 
@@ -260,6 +259,26 @@ class BPlusTree:
                     res.append(node.children[i])
                 elif k > end:
                     return res
+            node_id = node.next
+
+        return res
+
+    # SCAN
+
+    def scan(self):
+        self.cache.clear()
+        node_id = self.root
+
+        while True:
+            node = self._read_node(node_id)
+            if node.is_leaf:
+                break
+            node_id = node.children[0]
+
+        res = []
+        while node_id != -1:
+            node = self._read_node(node_id)
+            res.extend(node.children)
             node_id = node.next
 
         return res

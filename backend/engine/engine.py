@@ -4,6 +4,7 @@ from index.bplustree import BPlusTree
 from index.hash import ExtendibleHash
 from index.sequential import SequentialFile
 from index.rtree import RTree
+from index.heap import HeapFile
 from utils.csv_loader import CSVLoader
 
 
@@ -37,11 +38,14 @@ class Engine:
         columns = query_dict.get("columns", [])
         from_file = query_dict.get("from_file")
 
-        index_type = "BPLUSTREE"
+        # Default: HEAP (sin INDEX explícito). El usuario debe pedir un índice.
+        index_type = None
         for col in columns:
             if col.get("index"):
                 index_type = col["index"].upper()
                 break
+        if index_type is None:
+            index_type = "HEAP"
 
         os.makedirs(base_path, exist_ok=True)
         main_path = os.path.join(base_path, f"{table}.db")
@@ -55,8 +59,12 @@ class Engine:
             if not point_extractor:
                 raise Exception("RTREE requiere point_extractor")
             index = RTree(main_path, record_size, point_extractor)
-        else:
+        elif index_type == "HEAP":
+            index = HeapFile(main_path, record_size, key_extractor)
+        elif index_type == "BPLUSTREE":
             index = BPlusTree(main_path, record_size, key_extractor, order=order)
+        else:
+            raise Exception(f"Tipo de índice no soportado: {index_type}")
 
         self.create_table(table, index, columns=columns, index_type=index_type)
 
@@ -84,7 +92,8 @@ class Engine:
                 table,
                 self,
                 row_parser=self._row_parser(columns),
-                make_record=make_record
+                make_record=make_record,
+                column_names=[c.get("name") for c in columns],
             )
 
         return {"table": table, "index": index_type, "inserted": inserted}
@@ -128,7 +137,7 @@ class Engine:
     def execute(self, query_dict, make_record,
                 create_table=None, delete_record=None, select_all=None,
                 record_size=None, key_extractor=None, point_extractor=None,
-                base_path="data", order=4):
+                base_path="data", order=4, decode=None):
         qtype = query_dict["type"]
 
         if qtype == "INSERT":
@@ -148,10 +157,24 @@ class Engine:
             cond = query_dict["condition"]
 
             if cond["type"] == "EQUAL":
-                return self.search(table, cond["value"])
+                cond_col = cond.get("column")
+                key_col = self._key_column(self._get_table(table))
+                if cond_col is None or cond_col == key_col:
+                    return self.search(table, cond["value"])
+                # Fallback: columna no indexada -> scan + filtro lineal
+                return self._scan_filter(table, lambda row: row.get(cond_col) == cond["value"], decode)
 
             if cond["type"] == "BETWEEN":
-                return self.range_search(table, cond["begin"], cond["end"])
+                cond_col = cond.get("column")
+                key_col = self._key_column(self._get_table(table))
+                if cond_col is None or cond_col == key_col:
+                    return self.range_search(table, cond["begin"], cond["end"])
+                begin, end = cond["begin"], cond["end"]
+                return self._scan_filter(
+                    table,
+                    lambda row: (row.get(cond_col) is not None and begin <= row.get(cond_col) <= end),
+                    decode,
+                )
 
             if cond["type"] == "IN_RADIUS":
                 table_obj = self._get_table(table)
@@ -248,6 +271,29 @@ class Engine:
             return index.dm
         return None
 
+    def _key_column(self, table):
+        # Columna indexada (primera con INDEX), fallback a la primera col
+        for col in (table.columns or []):
+            if col.get("index"):
+                return col.get("name")
+        if table.columns:
+            return table.columns[0].get("name")
+        return None
+
+    def _scan_filter(self, table_name, predicate_row, decode):
+        # Scan + filtro lineal sobre fila decodificada (para WHERE col != indexada)
+        table_obj = self._get_table(table_name)
+        index = table_obj.index
+        if not hasattr(index, "scan"):
+            raise Exception("Índice no soporta scan(); WHERE sobre columna no indexada no disponible")
+        if decode is None:
+            raise Exception("WHERE sobre columna no indexada requiere decode")
+        dm = self._get_dm(table_obj)
+        if dm:
+            dm.reset_stats()
+        results = [r for r in index.scan() if predicate_row(decode(r))]
+        return results, self._get_stats(table_obj)
+
     def _get_stats(self, table):
         """Retorna stats del DiskManager si existe, sino vacío."""
         dm = self._get_dm(table)
@@ -321,4 +367,6 @@ class Engine:
             return "HASH"
         if "rtree" in name:
             return "RTREE"
+        if "heap" in name:
+            return "HEAP"
         return "BPLUSTREE"

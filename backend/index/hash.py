@@ -230,6 +230,22 @@ class ExtendibleHash:
         return [r for r in page.read_records() if self.key(r) == key_value]
 
     # -----------------------------
+    # SCAN (para SELECT *)
+    # -----------------------------
+    def scan(self):
+        # Buckets pueden aparecer varias veces en el directorio: deduplicar
+        results = []
+        seen = set()
+        for bucket_id in self.directory:
+            if bucket_id in seen:
+                continue
+            seen.add(bucket_id)
+            raw = self.dm.read_page(bucket_id)
+            page = Page.from_bytes(raw, self.record_size)
+            results.extend(page.read_records())
+        return results
+
+    # -----------------------------
     # REMOVE
     # -----------------------------
     def remove(self, key_value):

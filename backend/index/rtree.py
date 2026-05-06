@@ -362,8 +362,25 @@ class RTree:
                 if mbr.intersects_circle(cx, cy, r):
                     self._range_recursive(child_id, cx, cy, r, results)
 
+    # SCAN (para SELECT *)
+
+    def scan(self):
+        # DFS sobre el árbol recolectando todos los registros en hojas
+        results = []
+        self._scan_recursive(self.root, results)
+        return results
+
+    def _scan_recursive(self, page_id, results):
+        node = self._read_node(page_id)
+        if node.is_leaf:
+            for (_x, _y, rec) in node.entries:
+                results.append(rec)
+        else:
+            for (_mbr, child_id) in node.entries:
+                self._scan_recursive(child_id, results)
+
     # KNN
-    
+
 
     def knn(self, cx: float, cy: float, k: int) -> list:
         """
