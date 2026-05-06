@@ -1,40 +1,6 @@
 {
-  "students": {
-    "columns": [
-      {
-        "name": "id",
-        "type": "INT",
-        "index": "BPLUSTREE"
-      },
-      {
-        "name": "name",
-        "type": "TEXT",
-        "index": null
-      },
-      {
-        "name": "age",
-        "type": "INT",
-        "index": null
-      }
-    ],
-    "index": "BPLUSTREE",
-    "record_size": 40,
-    "key_column": "id",
-    "column_sizes": {},
-    "base_path": "/Users/denzel/Personal/UTEC/BD2/BD2-PROYECTO/backend/data"
-  },
   "chipotle": {
     "columns": [
-      {
-        "name": "latitude",
-        "type": "FLOAT",
-        "index": "RTREE"
-      },
-      {
-        "name": "longitude",
-        "type": "FLOAT",
-        "index": null
-      },
       {
         "name": "state",
         "type": "TEXT",
@@ -49,12 +15,171 @@
         "name": "address",
         "type": "TEXT",
         "index": null
+      },
+      {
+        "name": "latitude",
+        "type": "FLOAT",
+        "index": null
+      },
+      {
+        "name": "longitude",
+        "type": "FLOAT",
+        "index": null
       }
     ],
-    "index": "RTREE",
+    "index": "HEAP",
     "record_size": 112,
-    "key_column": "latitude",
-    "column_sizes": {},
-    "base_path": "/Users/denzel/Personal/UTEC/BD2/BD2-PROYECTO/backend/data"
+    "key_column": "state",
+    "column_sizes": {
+      "state": 16,
+      "location": 16,
+      "address": 64
+    }
+  },
+  "students": {
+    "columns": [
+      {
+        "name": "1",
+        "type": "INT",
+        "index": null
+      },
+      {
+        "name": "Ana",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "20",
+        "type": "INT",
+        "index": null
+      }
+    ],
+    "index": "HEAP",
+    "record_size": 24,
+    "key_column": "1",
+    "column_sizes": {
+      "Ana": 16
+    }
+  },
+  "liga1": {
+    "columns": [
+      {
+        "name": "Date",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Time",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Comp",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Round",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Day",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Venue",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Result",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "GF",
+        "type": "INT",
+        "index": null
+      },
+      {
+        "name": "GA",
+        "type": "INT",
+        "index": null
+      },
+      {
+        "name": "Opponent",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Poss",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Attendance",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Captain",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Formation",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Opp_Formation",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Referee",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Match_Report",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Notes",
+        "type": "TEXT",
+        "index": null
+      },
+      {
+        "name": "Team",
+        "type": "TEXT",
+        "index": null
+      }
+    ],
+    "index": "HEAP",
+    "record_size": 304,
+    "key_column": "Date",
+    "column_sizes": {
+      "Date": 16,
+      "Time": 16,
+      "Comp": 16,
+      "Round": 24,
+      "Day": 16,
+      "Venue": 16,
+      "Result": 16,
+      "Opponent": 16,
+      "Poss": 16,
+      "Attendance": 16,
+      "Captain": 16,
+      "Formation": 16,
+      "Opp_Formation": 16,
+      "Referee": 24,
+      "Match_Report": 16,
+      "Notes": 24,
+      "Team": 16
+    }
   }
 }
