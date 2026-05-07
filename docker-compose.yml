@@ -1,0 +1,18 @@
+services:
+  backend:
+    build: ./backend
+    container_name: bd2_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  frontend:
+    build: ./frontend
+    container_name: bd2_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
