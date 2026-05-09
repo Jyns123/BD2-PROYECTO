@@ -88,24 +88,28 @@ class SequentialFile:
         def __init__(self, main_dm, overflow_dm):
             self._main = main_dm
             self._overflow = overflow_dm
+            self._extra_reads  = 0   
+            self._extra_writes = 0   
 
         def reset_stats(self):
             self._main.reset_stats()
             self._overflow.reset_stats()
+            self._extra_reads  = 0   
+            self._extra_writes = 0  
 
         def get_stats(self):
             return {
-                "reads":  self._main.read_count  + self._overflow.read_count,
-                "writes": self._main.write_count + self._overflow.write_count,
+                "reads":  self._main.read_count  + self._overflow.read_count  + self._extra_reads,
+                "writes": self._main.write_count + self._overflow.write_count + self._extra_writes,
             }
 
         @property
         def read_count(self):
-            return self._main.read_count + self._overflow.read_count
+            return self._main.read_count + self._overflow.read_count + self._extra_reads
 
         @property
         def write_count(self):
-            return self._main.write_count + self._overflow.write_count
+            return self._main.write_count + self._overflow.write_count + self._extra_writes
 
     def insert(self, record: bytes):
         if not isinstance(record, (bytes, bytearray)):
@@ -120,9 +124,7 @@ class SequentialFile:
             self.rebuild()
    
 
-    # SCAN (para SELECT *)
     def scan(self):
-        # main ya está ordenado; overflow puede no estarlo: sort final por key
         results = list(self.main.scan()) + list(self.overflow.scan())
         results.sort(key=self.key)
         return results
@@ -130,7 +132,6 @@ class SequentialFile:
     def search(self, key_value):
         results = []
         try:
-            # Binary search en main (O(log n))
             if self._main_record_count > 0:
                 idx = self._find_left(key_value)
                 while idx < self._main_record_count:
@@ -144,7 +145,6 @@ class SequentialFile:
                         break
                     idx += 1
 
-            # Scan lineal en overflow (siempre desordenado)
             for r in self.overflow.scan():
                 if self.key(r) == key_value:
                     results.append(r)
@@ -237,7 +237,8 @@ class SequentialFile:
                 overflow_rec = next(overflow_iter, None)
 
             tmp_main_dm.close()
-
+            prev_reads  = self.dm.read_count
+            prev_writes = self.dm.write_count
             self.main_dm.close()
             self.overflow_dm.close()
 
@@ -248,11 +249,14 @@ class SequentialFile:
             if os.path.exists(self.overflow_path):
                 os.remove(self.overflow_path)
 
+
             self.main_dm = DiskManager(self.main_path)
             self.overflow_dm = DiskManager(self.overflow_path)
             self.main = HeapFile(self.main_dm, self.record_size)
             self.overflow = HeapFile(self.overflow_dm, self.record_size)
             self.dm = self._UnifiedDM(self.main_dm, self.overflow_dm)
+            self.dm._extra_reads  = prev_reads   
+            self.dm._extra_writes = prev_writes  
             self._overflow_count = 0
             self._main_record_count = self._count_main_records()
 

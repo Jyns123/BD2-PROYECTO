@@ -1,0 +1,218 @@
+[
+  {
+    "structure": "bplustree",
+    "operation": "insert",
+    "n": 1000,
+    "reads": 1.95,
+    "writes": 1.091,
+    "disk_accesses": 3.041,
+    "time_ms": 0.0252
+  },
+  {
+    "structure": "bplustree",
+    "operation": "search",
+    "n": 1000,
+    "reads": 2.05,
+    "writes": 0.0,
+    "disk_accesses": 2.05,
+    "time_ms": 0.0164
+  },
+  {
+    "structure": "bplustree",
+    "operation": "range_search",
+    "n": 1000,
+    "reads": 2.5,
+    "writes": 0.0,
+    "disk_accesses": 2.5,
+    "time_ms": 0.0214
+  },
+  {
+    "structure": "hash",
+    "operation": "insert",
+    "n": 1000,
+    "reads": 1.028,
+    "writes": 1.056,
+    "disk_accesses": 2.084,
+    "time_ms": 0.0061
+  },
+  {
+    "structure": "hash",
+    "operation": "search",
+    "n": 1000,
+    "reads": 1.0,
+    "writes": 0.0,
+    "disk_accesses": 1.0,
+    "time_ms": 0.0152
+  },
+  {
+    "structure": "sequential",
+    "operation": "insert",
+    "n": 1000,
+    "reads": 1.06,
+    "writes": 1.01,
+    "disk_accesses": 2.07,
+    "time_ms": 0.0214
+  },
+  {
+    "structure": "sequential",
+    "operation": "search",
+    "n": 1000,
+    "reads": 12.0,
+    "writes": 0.0,
+    "disk_accesses": 12.0,
+    "time_ms": 0.0336
+  },
+  {
+    "structure": "sequential",
+    "operation": "range_search",
+    "n": 1000,
+    "reads": 11.0,
+    "writes": 0.0,
+    "disk_accesses": 11.0,
+    "time_ms": 0.0355
+  },
+  {
+    "structure": "bplustree",
+    "operation": "insert",
+    "n": 10000,
+    "reads": 2.827,
+    "writes": 1.0896,
+    "disk_accesses": 3.9166,
+    "time_ms": 0.0277
+  },
+  {
+    "structure": "bplustree",
+    "operation": "search",
+    "n": 10000,
+    "reads": 3.0,
+    "writes": 0.0,
+    "disk_accesses": 3.0,
+    "time_ms": 0.0196
+  },
+  {
+    "structure": "bplustree",
+    "operation": "range_search",
+    "n": 10000,
+    "reads": 5.7,
+    "writes": 0.0,
+    "disk_accesses": 5.7,
+    "time_ms": 0.0437
+  },
+  {
+    "structure": "hash",
+    "operation": "insert",
+    "n": 10000,
+    "reads": 1.0254,
+    "writes": 1.0508,
+    "disk_accesses": 2.0762,
+    "time_ms": 0.0059
+  },
+  {
+    "structure": "hash",
+    "operation": "search",
+    "n": 10000,
+    "reads": 1.0,
+    "writes": 0.0,
+    "disk_accesses": 1.0,
+    "time_ms": 0.0177
+  },
+  {
+    "structure": "sequential",
+    "operation": "insert",
+    "n": 10000,
+    "reads": 1.5051,
+    "writes": 1.01,
+    "disk_accesses": 2.5151,
+    "time_ms": 0.1419
+  },
+  {
+    "structure": "sequential",
+    "operation": "search",
+    "n": 10000,
+    "reads": 15.45,
+    "writes": 0.0,
+    "disk_accesses": 15.45,
+    "time_ms": 0.0387
+  },
+  {
+    "structure": "sequential",
+    "operation": "range_search",
+    "n": 10000,
+    "reads": 15.4,
+    "writes": 0.0,
+    "disk_accesses": 15.4,
+    "time_ms": 0.094
+  },
+  {
+    "structure": "bplustree",
+    "operation": "insert",
+    "n": 100000,
+    "reads": 3.4123,
+    "writes": 1.0894,
+    "disk_accesses": 4.5017,
+    "time_ms": 0.0359
+  },
+  {
+    "structure": "bplustree",
+    "operation": "search",
+    "n": 100000,
+    "reads": 4.05,
+    "writes": 0.0,
+    "disk_accesses": 4.05,
+    "time_ms": 0.0289
+  },
+  {
+    "structure": "bplustree",
+    "operation": "range_search",
+    "n": 100000,
+    "reads": 33.0,
+    "writes": 0.0,
+    "disk_accesses": 33.0,
+    "time_ms": 0.2804
+  },
+  {
+    "structure": "hash",
+    "operation": "insert",
+    "n": 100000,
+    "reads": 1.02648,
+    "writes": 1.05296,
+    "disk_accesses": 2.07944,
+    "time_ms": 0.008
+  },
+  {
+    "structure": "hash",
+    "operation": "search",
+    "n": 100000,
+    "reads": 1.0,
+    "writes": 0.0,
+    "disk_accesses": 1.0,
+    "time_ms": 0.0203
+  },
+  {
+    "structure": "sequential",
+    "operation": "insert",
+    "n": 100000,
+    "reads": 5.91681,
+    "writes": 1.01,
+    "disk_accesses": 6.92681,
+    "time_ms": 2.7804
+  },
+  {
+    "structure": "sequential",
+    "operation": "search",
+    "n": 100000,
+    "reads": 18.6,
+    "writes": 0.0,
+    "disk_accesses": 18.6,
+    "time_ms": 0.0619
+  },
+  {
+    "structure": "sequential",
+    "operation": "range_search",
+    "n": 100000,
+    "reads": 27.8,
+    "writes": 0.0,
+    "disk_accesses": 27.8,
+    "time_ms": 0.648
+  }
+]
