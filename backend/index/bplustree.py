@@ -1,8 +1,6 @@
 import struct
 from storage.disk_manager import DiskManager, PAGE_SIZE
 
-KEY_SIZE = 8   # float64 (double) — soporta int y float sin pérdida de precisión
-
 
 class Node:
     def __init__(self, is_leaf):
@@ -13,20 +11,47 @@ class Node:
 
 
 class BPlusTree:
-    def __init__(self, file_path, record_size, key_extractor, order=4):
+    def __init__(self, file_path, record_size, key_extractor, order=4,
+                 key_type='numeric', key_size=None):
+        """
+        key_type='numeric' → keys are int/float, stored as float64 (8 bytes).
+        key_type='string'  → keys are str, stored as `key_size`-byte utf-8 padded.
+        """
         self.dm = DiskManager(file_path)
         self.record_size = record_size
         self.key_extractor = key_extractor
         self.order = order
         self.cache = {}
 
+        if key_type == 'string':
+            if key_size is None or key_size <= 0:
+                raise ValueError("BPlusTree(key_type='string') requiere key_size > 0")
+            self.key_type = 'string'
+            self.key_size = int(key_size)
+        else:
+            self.key_type = 'numeric'
+            self.key_size = 8
+
         if self.dm._get_total_pages() == 1:
             self.root = self._new_leaf()
-            self.dm.set_root(self.root)      
+            self.dm.set_root(self.root)
         else:
-            self.root = self.dm.get_root()   
+            self.root = self.dm.get_root()
 
     # SERIALIZACIÓN
+
+    def _encode_key(self, k, buf, offset):
+        if self.key_type == 'string':
+            kb = str(k).encode('utf-8')[:self.key_size]
+            buf[offset:offset+self.key_size] = kb.ljust(self.key_size, b'\x00')
+        else:
+            struct.pack_into('>d', buf, offset, float(k))
+
+    def _decode_key(self, data, offset):
+        if self.key_type == 'string':
+            chunk = bytes(data[offset:offset+self.key_size])
+            return chunk.split(b'\x00', 1)[0].decode('utf-8')
+        return struct.unpack_from('>d', data, offset)[0]
 
     def _serialize(self, node):
         data = bytearray(PAGE_SIZE)
@@ -35,8 +60,8 @@ class BPlusTree:
 
         offset = 5
         for k in node.keys:
-            struct.pack_into('>d', data, offset, float(k))
-            offset += KEY_SIZE
+            self._encode_key(k, data, offset)
+            offset += self.key_size
 
         next_ptr = node.next if node.next >= 0 else 0
         data[offset:offset+4] = next_ptr.to_bytes(4, 'big')
@@ -61,9 +86,8 @@ class BPlusTree:
         offset = 5
 
         for _ in range(n_keys):
-            k, = struct.unpack_from('>d', data, offset)
-            node.keys.append(k)
-            offset += KEY_SIZE
+            node.keys.append(self._decode_key(data, offset))
+            offset += self.key_size
 
         node.next = int.from_bytes(data[offset:offset+4], 'big')
         if node.next == 0:

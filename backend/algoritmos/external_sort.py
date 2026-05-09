@@ -167,11 +167,11 @@ def _cleanup(paths: list[str], tmp_dir: str):
 
 def external_sort_to_file(records: Iterable[bytes], output_path: str,
                           record_size: int, key_fn, buffer_pages: int = 4) -> dict:
-    """Run TPMMS and write sorted output to a new heap-format file at `output_path`."""
+    """Run External Merge Sort and write sorted output to a new heap-format file at `output_path`."""
     if buffer_pages < 1:
         raise ValueError("buffer_pages must be >= 1")
 
-    tmp_dir = tempfile.mkdtemp(prefix="tpmms_")
+    tmp_dir = tempfile.mkdtemp(prefix="extsort_")
     t0 = time.time()
     runs = _generate_runs(records, record_size, key_fn, buffer_pages, tmp_dir)
     t1 = time.time()
@@ -197,11 +197,11 @@ def external_sort_to_file(records: Iterable[bytes], output_path: str,
 
 def external_sort(records: Iterable[bytes], record_size: int, key_fn,
                   buffer_pages: int = 4) -> dict:
-    """Run TPMMS and return the sorted records as a list, plus stats."""
+    """Run External Merge Sort and return the sorted records as a list, plus stats."""
     if buffer_pages < 1:
         raise ValueError("buffer_pages must be >= 1")
 
-    tmp_dir = tempfile.mkdtemp(prefix="tpmms_")
+    tmp_dir = tempfile.mkdtemp(prefix="extsort_")
     t0 = time.time()
     runs = _generate_runs(records, record_size, key_fn, buffer_pages, tmp_dir)
     t1 = time.time()

@@ -74,7 +74,6 @@ export default function QueryEditor({ onExecute, loading, onCursorChange, onTogg
               : <Play size={12} />
             }
             Execute
-            <span className="text-[10px] opacity-70 ml-1">⌘↵</span>
           </button>
           <button
             onClick={onToggleMaximize}
