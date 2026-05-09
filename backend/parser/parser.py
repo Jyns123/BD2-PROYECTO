@@ -122,10 +122,11 @@ class Parser:
                 "type": "SELECT",
                 "table": table,
                 "condition": where_cond,
+                "projection": projection,
             }
 
         # SELECT * FROM t
-        return {"type": "SELECT_ALL", "table": table}
+        return {"type": "SELECT_ALL", "table": table, "projection": projection}
 
     # -----------------------------
     # Projection

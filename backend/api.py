@@ -509,6 +509,18 @@ def _run_single(tokens, req: QueryRequest):
                 return {"ok": True, "rows": [], "stats": {**stats, "time_ms": (t1 - t0) * 1000}}
 
             rows = [codec.decode(r) for r in results]
+
+            # Aplicar proyección si el parser indicó columnas específicas
+            proj = qd.get("projection")
+            if proj and proj.get("items") and not (len(proj.get("items")) == 1 and proj["items"][0]["kind"] == "STAR"):
+                cols = [it["name"] for it in proj["items"] if it.get("kind") == "COL"]
+                if cols:
+                    filtered = []
+                    for row in rows:
+                        newrow = {c: row.get(c) for c in cols}
+                        filtered.append(newrow)
+                    rows = filtered
+
             return {"ok": True, "rows": rows, "stats": {**stats, "time_ms": (t1 - t0) * 1000}}
         finally:
             lock_manager.release_all(tx_id)
