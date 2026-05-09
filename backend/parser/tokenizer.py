@@ -9,7 +9,11 @@ def tokenize(query: str):
         "INSERT", "INTO", "VALUES", "CREATE", "TABLE",
         "INDEX", "BPLUSTREE", "HASH", "SEQUENTIAL", "HEAP", "RTREE",
         "DELETE", "FILE", "IN", "POINT", "RADIUS", "K",
-        "INT", "FLOAT", "TEXT"
+        "INT", "FLOAT", "TEXT",
+        "JOIN", "INNER", "ON",
+        "GROUP", "BY", "ORDER", "ASC", "DESC",
+        "COUNT", "SUM", "AVG", "MIN", "MAX",
+        "AS",
     }
 
     while i < n:
@@ -48,13 +52,12 @@ def tokenize(query: str):
             tokens.append(query[start:i])
             continue
 
-        # identificadores / keywords
+        # identificadores permite '.' para t.col
         start = i
-        while i < n and (query[i].isalnum() or query[i] == "_"):
+        while i < n and (query[i].isalnum() or query[i] == "_" or query[i] == "."):
             i += 1
         word = query[start:i]
         if not word:
-            # caracter desconocido: saltar para evitar loop
             i += 1
             continue
         up = word.upper()
