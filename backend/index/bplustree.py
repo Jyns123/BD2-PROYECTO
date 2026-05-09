@@ -7,16 +7,14 @@ class Node:
         self.is_leaf = is_leaf
         self.keys = []
         self.children = []
-        self.next = -1
+        self.next = -1  # solo lo usan las hojas para encadenarse
 
 
 class BPlusTree:
     def __init__(self, file_path, record_size, key_extractor, order=4,
                  key_type='numeric', key_size=None):
-        """
-        key_type='numeric' → keys are int/float, stored as float64 (8 bytes).
-        key_type='string'  → keys are str, stored as `key_size`-byte utf-8 padded.
-        """
+        # key_type='numeric' guarda la clave como float
+        # key_type='string'  la guarda como UTF-8 con padding de ceros hasta key_size bytes
         self.dm = DiskManager(file_path)
         self.record_size = record_size
         self.key_extractor = key_extractor
@@ -32,13 +30,17 @@ class BPlusTree:
             self.key_type = 'numeric'
             self.key_size = 8
 
+        # si el archivo es nuevo (solo tiene la pagina de metadatos) creamos la raiz
+        # si ya existia, recuperamos el page_id de la raiz desde los metadatos
         if self.dm._get_total_pages() == 1:
             self.root = self._new_leaf()
             self.dm.set_root(self.root)
         else:
             self.root = self.dm.get_root()
 
-    # SERIALIZACIÓN
+    # --- serializacion / deserializacion ---
+    # cada nodo vive en exactamente una pagina de PAGE_SIZE bytes
+    # el formato es: [is_leaf(1)] [n_keys(4)] [keys...] [next_ptr(4)] [children...]
 
     def _encode_key(self, k, buf, offset):
         if self.key_type == 'string':
@@ -63,6 +65,7 @@ class BPlusTree:
             self._encode_key(k, data, offset)
             offset += self.key_size
 
+        # guardamos next como 0 cuando no hay sucesor (en vez de -1 que no cabe en 4 bytes)
         next_ptr = node.next if node.next >= 0 else 0
         data[offset:offset+4] = next_ptr.to_bytes(4, 'big')
         offset += 4
@@ -91,7 +94,7 @@ class BPlusTree:
 
         node.next = int.from_bytes(data[offset:offset+4], 'big')
         if node.next == 0:
-            node.next = -1
+            node.next = -1  # volvemos a la convencion interna
         offset += 4
 
         if is_leaf:
@@ -107,8 +110,7 @@ class BPlusTree:
 
         return node
 
-    
-    # IO
+    # --- lectura y escritura de nodos ---
 
     def _read_node(self, page_id):
         if page_id in self.cache:
@@ -134,14 +136,17 @@ class BPlusTree:
         self._write_node(pid, node)
         return pid
 
-    # INSERT
+    # --- insercion ---
 
     def insert(self, record):
-        self.cache.clear()                          
+        # limpiamos el cache antes de cada operacion medida para que
+        # los I/O del DiskManager reflejen accesos reales a disco
+        self.cache.clear()
         key = self.key_extractor(record)
         split = self._insert_recursive(self.root, key, record)
 
         if split:
+            # la raiz se partio, hay que crear una nueva raiz interna
             new_root = Node(is_leaf=False)
             new_root.keys = [split[0]]
             new_root.children = [self.root, split[1]]
@@ -149,12 +154,13 @@ class BPlusTree:
             root_id = self.dm.allocate_page()
             self._write_node(root_id, new_root)
             self.root = root_id
-            self.dm.set_root(self.root)              
+            self.dm.set_root(self.root)  # persistimos el nuevo root_page_id
 
     def _insert_recursive(self, node_id, key, record):
         node = self._read_node(node_id)
 
         if node.is_leaf:
+            # insertamos en orden
             i = 0
             while i < len(node.keys) and node.keys[i] < key:
                 i += 1
@@ -175,6 +181,7 @@ class BPlusTree:
             if not split:
                 return None
 
+            # el hijo se partio, tenemos que absorber la clave promovida
             new_key, new_child = split
             node.keys.insert(i, new_key)
             node.children.insert(i + 1, new_child)
@@ -184,7 +191,7 @@ class BPlusTree:
                 return None
             return self._split_internal(node_id, node)
 
-    # SPLIT
+    # --- splits ---
 
     def _split_leaf(self, node_id, node):
         mid = len(node.keys) // 2
@@ -199,16 +206,17 @@ class BPlusTree:
         right.next = node.next
 
         new_id = self.dm.allocate_page()
-        left.next = new_id
+        left.next = new_id  # encadenamos las hojas
 
         self._write_node(node_id, left)
         self._write_node(new_id, right)
 
+        # la primera clave de la hoja derecha sube al padre
         return right.keys[0], new_id
 
     def _split_internal(self, node_id, node):
         mid = len(node.keys) // 2
-        promote = node.keys[mid]
+        promote = node.keys[mid]  # esta clave sube, no se queda en ninguno de los dos
 
         left = Node(is_leaf=False)
         right = Node(is_leaf=False)
@@ -225,10 +233,10 @@ class BPlusTree:
 
         return promote, new_id
 
-    # SEARCH
+    # --- busqueda puntual ---
 
     def search(self, key):
-        self.cache.clear()                          
+        self.cache.clear()
         node_id = self.root
 
         while True:
@@ -244,6 +252,7 @@ class BPlusTree:
                         return res
                     i += 1
 
+                # seguimos por las hojas encadenadas por si hay duplicados
                 next_id = node.next
                 while next_id != -1:
                     node = self._read_node(next_id)
@@ -262,12 +271,13 @@ class BPlusTree:
                     i += 1
                 node_id = node.children[i]
 
-    # RANGE SEARCH
+    # --- busqueda por rango ---
 
     def range_search(self, start, end):
-        self.cache.clear()                          
+        self.cache.clear()
         node_id = self.root
 
+        # bajamos hasta la primera hoja que podria tener start
         while True:
             node = self._read_node(node_id)
             if node.is_leaf:
@@ -277,6 +287,7 @@ class BPlusTree:
                 i += 1
             node_id = node.children[i]
 
+        # recorremos la lista enlazada de hojas hasta salir del rango
         res = []
         while node_id != -1:
             node = self._read_node(node_id)
@@ -290,12 +301,13 @@ class BPlusTree:
 
         return res
 
-    # SCAN
+    # --- scan completo ---
 
     def scan(self):
         self.cache.clear()
         node_id = self.root
 
+        # llegamos a la hoja mas a la izquierda
         while True:
             node = self._read_node(node_id)
             if node.is_leaf:
@@ -310,10 +322,10 @@ class BPlusTree:
 
         return res
 
-    # REMOVE
+    # --- eliminacion ---
 
     def remove(self, key):
-        self.cache.clear()                          
+        self.cache.clear()
         path = []
         leaf_id = self._find_leaf_with_path(key, path)
         removed = self._delete_from_leaf(leaf_id, key)
@@ -324,6 +336,7 @@ class BPlusTree:
         return removed
 
     def _find_leaf_with_path(self, key, path):
+        # igual que la busqueda pero guardamos el camino para el rebalanceo
         node_id = self.root
         while True:
             node = self._read_node(node_id)
@@ -359,12 +372,14 @@ class BPlusTree:
         return removed
 
     def _rebalance_after_delete(self, node_id, path):
+        # intentamos robar de un hermano; si no se puede, fusionamos y subimos
         min_keys = max(1, self.order // 2)
 
         while True:
             node = self._read_node(node_id)
 
             if node_id == self.root:
+                # si la raiz interna quedo vacia, su unico hijo pasa a ser la nueva raiz
                 if not node.is_leaf and len(node.keys) == 0:
                     self.root = node.children[0]
                     self.dm.set_root(self.root)
@@ -382,6 +397,7 @@ class BPlusTree:
             left_id = parent.children[idx - 1] if idx > 0 else None
             right_id = parent.children[idx + 1] if idx + 1 < len(parent.children) else None
 
+            # intentamos robar del hermano izquierdo
             if left_id is not None:
                 left = self._read_node(left_id)
                 if len(left.keys) > min_keys:
@@ -402,6 +418,7 @@ class BPlusTree:
                     self._write_node(parent_id, parent)
                     return
 
+            # intentamos robar del hermano derecho
             if right_id is not None:
                 right = self._read_node(right_id)
                 if len(right.keys) > min_keys:
@@ -422,6 +439,7 @@ class BPlusTree:
                     self._write_node(parent_id, parent)
                     return
 
+            # no se puede robar de ninguno: fusionamos con el izquierdo si existe
             if left_id is not None:
                 left = self._read_node(left_id)
                 if node.is_leaf:
@@ -442,6 +460,7 @@ class BPlusTree:
                 node_id = parent_id
                 continue
 
+            # si no hay izquierdo, fusionamos con el derecho
             if right_id is not None:
                 right = self._read_node(right_id)
                 if node.is_leaf:
@@ -461,8 +480,6 @@ class BPlusTree:
                 self._write_node(parent_id, parent)
                 node_id = parent_id
                 continue
-
-    # CLOSE
 
     def close(self):
         self.dm.close()
