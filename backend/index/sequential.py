@@ -28,6 +28,7 @@ class SequentialFile:
 
         self.overflow_limit = 200
         self._overflow_count = self._count_overflow_records()
+        self._main_record_count = self._count_main_records()
 
     def _count_overflow_records(self) -> int:
         """Cuenta registros existentes en el archivo overflow (para reaberturas)."""
@@ -37,6 +38,50 @@ class SequentialFile:
             raw = self.overflow_dm.read_page(page_id)
             count += Page.from_bytes(raw, self.record_size).get_record_count()
         return count
+
+    def _count_main_records(self) -> int:
+        """Cuenta registros en el main file (para reaberturas y tras rebuild/remove)."""
+        count = 0
+        total_pages = self.main_dm._get_total_pages()
+        for page_id in range(1, total_pages):
+            raw = self.main_dm.read_page(page_id)
+            count += Page.from_bytes(raw, self.record_size).get_record_count()
+        return count
+
+    def _get_record_at(self, idx: int):
+        """
+        Accede directamente al registro en posición global idx del main file.
+        El main file siempre se escribe con HeapFile secuencial, por lo que
+        todas las páginas excepto la última están llenas: el mapeo es O(1).
+        """
+        records_per_page = (PAGE_SIZE - 4) // self.record_size  # 4 = HEADER_SIZE
+        page_id = (idx // records_per_page) + 1
+        slot    =  idx %  records_per_page
+        raw  = self.main_dm.read_page(page_id)
+        page = Page.from_bytes(raw, self.record_size)
+        if slot >= page.get_record_count():
+            return None
+        return page.read_record(slot)
+
+    def _find_left(self, key_value) -> int:
+        """
+        Binary search: retorna el índice del primer registro con key >= key_value.
+        Si no existe, retorna _main_record_count.
+        """
+        lo, hi   = 0, self._main_record_count - 1
+        result   = self._main_record_count
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            rec = self._get_record_at(mid)
+            if rec is None:
+                hi = mid - 1
+                continue
+            if self.key(rec) < key_value:
+                lo = mid + 1
+            else:
+                result = mid
+                hi     = mid - 1
+        return result
 
     class _UnifiedDM:
         """Suma reads/writes de main y overflow para métricas consistentes."""
@@ -75,7 +120,9 @@ class SequentialFile:
             self.rebuild()
    
 
+    # SCAN (para SELECT *)
     def scan(self):
+        # main ya está ordenado; overflow puede no estarlo: sort final por key
         results = list(self.main.scan()) + list(self.overflow.scan())
         results.sort(key=self.key)
         return results
@@ -83,13 +130,21 @@ class SequentialFile:
     def search(self, key_value):
         results = []
         try:
-            for r in self.main.scan():
-                k = self.key(r)
-                if k == key_value:
-                    results.append(r)
-                elif k > key_value:
-                    break  
+            # Binary search en main (O(log n))
+            if self._main_record_count > 0:
+                idx = self._find_left(key_value)
+                while idx < self._main_record_count:
+                    rec = self._get_record_at(idx)
+                    if rec is None:
+                        break
+                    k = self.key(rec)
+                    if k == key_value:
+                        results.append(rec)
+                    elif k > key_value:
+                        break
+                    idx += 1
 
+            # Scan lineal en overflow (siempre desordenado)
             for r in self.overflow.scan():
                 if self.key(r) == key_value:
                     results.append(r)
@@ -101,14 +156,21 @@ class SequentialFile:
     def range_search(self, begin, end):
         results = []
         try:
-            # FIX: early exit cuando k > end en main
-            for r in self.main.scan():
-                k = self.key(r)
-                if k > end:
-                    break
-                if begin <= k:
-                    results.append(r)
+            # Binary search para encontrar el inicio en main (O(log n + k))
+            if self._main_record_count > 0:
+                idx = self._find_left(begin)
+                while idx < self._main_record_count:
+                    rec = self._get_record_at(idx)
+                    if rec is None:
+                        break
+                    k = self.key(rec)
+                    if k > end:
+                        break
+                    if k >= begin:
+                        results.append(rec)
+                    idx += 1
 
+            # Scan lineal en overflow
             for r in self.overflow.scan():
                 k = self.key(r)
                 if begin <= k <= end:
@@ -178,6 +240,7 @@ class SequentialFile:
             self.overflow = HeapFile(self.overflow_dm, self.record_size)
             self.dm = self._UnifiedDM(self.main_dm, self.overflow_dm)
             self._overflow_count = 0
+            self._main_record_count = self._count_main_records()
 
         except Exception as e:
             if os.path.exists(main_tmp):
@@ -324,6 +387,7 @@ class SequentialFile:
                 page = Page.from_bytes(raw, self.record_size)
                 overflow_count += page.get_record_count()
             self._overflow_count = overflow_count
+            self._main_record_count = self._count_main_records()
 
             return removed_main + removed_overflow
 
