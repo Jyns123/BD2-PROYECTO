@@ -110,7 +110,7 @@ Todas operan sobre paginas de 4 KB. Los conteos de I/O son exactos por operacion
 
 ### Sequential File
 
-Tiene un archivo principal ordenado por clave y un archivo de desbordamiento para las inserciones intermedias. Cuando el overflow acumula mas de 200 registros, se reconstruye el principal con una fusion ordenada. La busqueda usa busqueda binaria sobre el principal y luego escanea el overflow. Bastante clasico.
+Tiene un archivo principal ordenado por clave y un archivo de desbordamiento para las inserciones intermedias. Cuando el overflow acumula mas de 200 registros, se reconstruye el principal con una fusion ordenada. La busqueda usa busqueda binaria sobre el principal y luego escanea el overflow. Como siempre, como en la mayoría de casos del sequential.
 
 | Operacion | Complejidad |
 |-----------|-------------|
@@ -141,7 +141,7 @@ Arbol balanceado con nodos serializados a paginas de tamano fijo. Las hojas esta
 
 ### R-Tree (espacial)
 
-Indice espacial para puntos 2D, cada nodo interno guarda MBRs (Minimum Bounding Rectangles) de sus hijos. Soporta busqueda por radio circular y k vecinos mas cercanos. La API expone los MBRs de todos los niveles para que el frontend los pueda dibujar.
+Indice espacial para puntos 2D, cada nodo interno guarda MBRs (Minimum Bounding Rectangles) de sus hijos. Soporta busqueda por radio circular y knn. La API expone los MBRs de todos los niveles para que el frontend los pueda dibujar.
 
 | Operacion | Que hace |
 |-----------|----------|
@@ -226,7 +226,7 @@ React 19 y Tailwind CSS consumiendo la API REST del backend.
 
 | Componente | Para que sirve |
 |------------|----------------|
-| QueryEditor | editor SQL con resaltado (CodeMirror, tema One Dark), ejecutar con Ctrl+Enter |
+| QueryEditor | editor SQL con resaltado (CodeMirror, tema One Dark), ejecutar con Ctrl +Enter |
 | ResultsPanel | tabla paginada con los registros retornados |
 | StatsBar | muestra lecturas, escrituras y tiempo en ms de la ultima query |
 | Sidebar | lista las tablas, permite crearlas con CSV y eliminarlas |
@@ -236,16 +236,13 @@ React 19 y Tailwind CSS consumiendo la API REST del backend.
 
 ## Como ejecutar el proyecto
 
-### Con Docker (recomendado)
+### Con Docker
 
-La opcion mas simple. No necesitas tener Python ni Node instalados, solo Docker Desktop.
 
 ```bash
-# clonar el repo
 git clone https://github.com/<usuario>/BD2-PROYECTO.git
 cd BD2-PROYECTO
 
-# levantar todo
 docker compose up --build
 ```
 
@@ -261,31 +258,6 @@ docker compose down
 
 ---
 
-### Sin Docker (ejecucion manual)
-
-Necesitas Python 3.10+ y Node 18+.
-
-**Backend:**
-
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn api:app --host 0.0.0.0 --port 8000 --reload
-```
-
-El servidor queda en `http://localhost:8000`. La documentacion interactiva de la API esta en `http://localhost:8000/docs`.
-
-**Frontend** (en otra terminal):
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-El frontend queda en `http://localhost:5173` (default de Vite). Si cambias el puerto del backend, actualiza el proxy en `vite.config.js`.
-
----
 
 ### Primeros pasos
 
@@ -354,7 +326,7 @@ python -m pytest test.py::TestBPlusTree -v
 python test.py
 ```
 
-Resultado esperado: **72/72 tests pasando**.
+Resultado esperado: **72/72 tests pasadoss**.
 
 | Suite | Tests | Que cubre |
 |-------|-------|-----------|
@@ -373,10 +345,8 @@ Resultado esperado: **72/72 tests pasando**.
 ```bash
 cd backend
 
-# correr el benchmark (genera utils/experiment_log.json)
 python -m utils.benchmark
 
-# generar el informe con graficos
 python -m utils.report_generator
 ```
 
@@ -411,7 +381,7 @@ El motor resetea los contadores antes de cada operacion para que los numeros sea
 
 ---
 
-## Decisiones de diseno
+## Decisiones de diseño
 
 **Pagina 0 como metadatos** - los primeros 8 bytes de cada `.db` guardan `total_pages` y `root_page_id`. Sin esto, al reabrir el archivo el arbol no sabe donde esta su raiz actual, porque puede haber migrado tras multiples splits.
 
