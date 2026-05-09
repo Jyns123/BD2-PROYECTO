@@ -156,21 +156,35 @@ class SequentialFile:
     def range_search(self, begin, end):
         results = []
         try:
-            # Binary search para encontrar el inicio en main (O(log n + k))
             if self._main_record_count > 0:
-                idx = self._find_left(begin)
-                while idx < self._main_record_count:
-                    rec = self._get_record_at(idx)
-                    if rec is None:
-                        break
-                    k = self.key(rec)
-                    if k > end:
-                        break
-                    if k >= begin:
-                        results.append(rec)
-                    idx += 1
+                records_per_page = (PAGE_SIZE - 4) // self.record_size
+                start_idx  = self._find_left(begin)
 
-            # Scan lineal en overflow
+                if start_idx < self._main_record_count:
+                    start_page = (start_idx // records_per_page) + 1
+                    start_slot =  start_idx %  records_per_page
+                    total_pages = self.main_dm._get_total_pages()
+                    done = False
+
+                    for page_id in range(start_page, total_pages):
+                        raw   = self.main_dm.read_page(page_id)
+                        page  = Page.from_bytes(raw, self.record_size)
+                        count = page.get_record_count()
+                        slot0 = start_slot if page_id == start_page else 0
+
+                        for slot in range(slot0, count):
+                            rec = page.read_record(slot)
+                            k   = self.key(rec)
+                            if k > end:
+                                done = True
+                                break
+                            if k >= begin:
+                                results.append(rec)
+
+                        if done:
+                            break
+
+            # Scan lineal en overflow (siempre desordenado)
             for r in self.overflow.scan():
                 k = self.key(r)
                 if begin <= k <= end:
