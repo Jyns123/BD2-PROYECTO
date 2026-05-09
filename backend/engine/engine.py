@@ -7,6 +7,10 @@ from index.rtree import RTree
 from index.heap import HeapFile
 from utils.csv_loader import CSVLoader
 
+from algoritmos.external_sort import external_sort
+from algoritmos.external_hashing import external_hash_group_by
+from algoritmos.hash_join import hash_join as _hash_join
+
 
 class Table:
     def __init__(self, name, index_structure, columns=None, index_type=None):
@@ -62,7 +66,21 @@ class Engine:
         elif index_type == "HEAP":
             index = HeapFile(main_path, record_size, key_extractor)
         elif index_type == "BPLUSTREE":
-            index = BPlusTree(main_path, record_size, key_extractor, order=order)
+            key_col_name = None
+            for col in columns:
+                if col.get("index"):
+                    key_col_name = col.get("name")
+                    break
+            if key_col_name is None and columns:
+                key_col_name = columns[0].get("name")
+            key_col_meta = next((c for c in columns if c.get("name") == key_col_name), None)
+            key_col_type = (key_col_meta.get("type") if key_col_meta else "INT").upper()
+            if key_col_type == "TEXT":
+                key_size = int(key_col_meta.get("size") or 32)
+                index = BPlusTree(main_path, record_size, key_extractor, order=order,
+                                  key_type='string', key_size=key_size)
+            else:
+                index = BPlusTree(main_path, record_size, key_extractor, order=order)
         else:
             raise Exception(f"Tipo de índice no soportado: {index_type}")
 
@@ -248,13 +266,106 @@ class Engine:
             if dm:
                 dm.reset_stats()
 
-            if hasattr(index, "remove") and cond["type"] == "EQUAL":
+            if not hasattr(index, "remove") or cond["type"] != "EQUAL":
+                raise Exception("DELETE no soportado por el índice")
+
+            cond_col = cond.get("column")
+            key_col = self._key_column(table_obj)
+            if cond_col is None or cond_col == key_col:
                 index.remove(cond["value"])
                 return None, self._get_stats(table_obj)
 
-            raise Exception("DELETE no soportado por el índice")
+            # DELETE por columna NO indexada: scan + filtro + remove por key.
+            if not hasattr(index, "scan"):
+                raise Exception("DELETE sobre columna no indexada requiere scan()")
+            if decode is None:
+                raise Exception("DELETE sobre columna no indexada requiere decode")
+            if not hasattr(index, "key_extractor") and not getattr(index, "key", None):
+                raise Exception("Índice no expone key_extractor; DELETE no disponible")
+            extractor = getattr(index, "key_extractor", None) or index.key
+
+            target = cond["value"]
+            keys_to_remove = []
+            for rec in index.scan():
+                row = decode(rec)
+                if row.get(cond_col) == target:
+                    keys_to_remove.append(extractor(rec))
+            for k in keys_to_remove:
+                index.remove(k)
+            return None, self._get_stats(table_obj)
 
         raise Exception(f"Tipo de query desconocido: {qtype}")
+
+    # -----------------------------
+    # External-memory algorithms (External Merge Sort, External Hashing, Hash JOIN)
+    # -----------------------------
+
+    def select_order(self, table_name, key_fn, buffer_pages: int = 4):
+        """Sort a relation via External Merge Sort. Returns (records, stats)."""
+        table = self._get_table(table_name)
+        index = table.index
+        if not hasattr(index, "scan"):
+            raise Exception("Índice no soporta scan(); ORDER BY no disponible")
+        dm = self._get_dm(table)
+        if dm:
+            dm.reset_stats()
+        records = index.scan()
+        scan_stats = self._get_stats(table)
+        result = external_sort(records, table.index.record_size if hasattr(table.index, "record_size") else len(records[0]) if records else 0,
+                               key_fn, buffer_pages=buffer_pages)
+        result["scan_reads"] = scan_stats.get("reads", 0)
+        return result["records"], result
+
+    def select_group(self, table_name, key_fn, value_fn=None, op: str = "COUNT",
+                     buckets: int = 16):
+        """GROUP BY via External Hashing. Returns (group_dict, stats)."""
+        table = self._get_table(table_name)
+        index = table.index
+        if not hasattr(index, "scan"):
+            raise Exception("Índice no soporta scan(); GROUP BY no disponible")
+        dm = self._get_dm(table)
+        if dm:
+            dm.reset_stats()
+        records = index.scan()
+        scan_stats = self._get_stats(table)
+        record_size = self._record_size(records, table)
+        result = external_hash_group_by(records, record_size, key_fn,
+                                        buckets=buckets, value_fn=value_fn, op=op)
+        result["scan_reads"] = scan_stats.get("reads", 0)
+        return result["result"], result
+
+    def select_join(self, left_name, right_name,
+                    left_key_fn, right_key_fn, buckets: int = 16):
+        """Hash JOIN via External Hashing. Returns (matches, stats)."""
+        left = self._get_table(left_name)
+        right = self._get_table(right_name)
+        if not hasattr(left.index, "scan") or not hasattr(right.index, "scan"):
+            raise Exception("JOIN requiere que ambos índices soporten scan()")
+        l_dm = self._get_dm(left)
+        r_dm = self._get_dm(right)
+        if l_dm:
+            l_dm.reset_stats()
+        if r_dm:
+            r_dm.reset_stats()
+        l_records = left.index.scan()
+        r_records = right.index.scan()
+        l_size = self._record_size(l_records, left)
+        r_size = self._record_size(r_records, right)
+        result = _hash_join(l_records, l_size, left_key_fn,
+                            r_records, r_size, right_key_fn,
+                            buckets=buckets)
+        result["left_scan_reads"] = self._get_stats(left).get("reads", 0)
+        result["right_scan_reads"] = self._get_stats(right).get("reads", 0)
+        return result["matches"], result
+
+    @staticmethod
+    def _record_size(records, table):
+        if records:
+            return len(records[0])
+        rs = getattr(table.index, "record_size", None)
+        if rs:
+            return rs
+        return 0
 
     # -----------------------------
     # UTILS

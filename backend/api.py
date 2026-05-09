@@ -174,7 +174,15 @@ def _get_or_open_table(name, meta):
     elif index_type == "HEAP":
         index = HeapFile(main_path, codec.record_size, codec.key_extractor(key_col))
     else:
-        index = BPlusTree(main_path, codec.record_size, codec.key_extractor(key_col))
+        # BPLUSTREE: detectar si la key es TEXT para usar string-mode
+        key_col_meta = next((c for c in columns if c.get("name") == key_col), None)
+        key_col_type = (key_col_meta.get("type") if key_col_meta else "INT").upper()
+        if key_col_type == "TEXT":
+            key_size = int((column_sizes or {}).get(key_col) or (key_col_meta.get("size") if key_col_meta else 32) or 32)
+            index = BPlusTree(main_path, codec.record_size, codec.key_extractor(key_col),
+                              key_type='string', key_size=key_size)
+        else:
+            index = BPlusTree(main_path, codec.record_size, codec.key_extractor(key_col))
 
     engine.create_table(name, index, columns=columns, index_type=index_type)
 
@@ -380,12 +388,66 @@ def get_rtree_mbrs(table: str):
 
 @app.post("/query")
 def run_query(req: QueryRequest):
-    sql       = req.sql
+    sql = req.sql
+
+    # Soporte multi-statement: tokenizar una vez, partir por ';' y ejecutar cada parte.
+    try:
+        all_tokens = tokenize(sql)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    statements: list[list] = []
+    cur: list = []
+    for tok in all_tokens:
+        if tok == ";":
+            if cur:
+                statements.append(cur)
+                cur = []
+        else:
+            cur.append(tok)
+    if cur:
+        statements.append(cur)
+
+    if not statements:
+        raise HTTPException(status_code=400, detail="Query vacía")
+
+    if len(statements) == 1:
+        return _run_single(statements[0], req)
+
+    # Multi-statement: ejecutar cada uno; agregar stats; devolver último resultado válido.
+    results = []
+    total_reads = 0
+    total_writes = 0
+    total_time_ms = 0.0
+    for tokens in statements:
+        single_req = QueryRequest(sql="", column_sizes=req.column_sizes, base_path=req.base_path)
+        out = _run_single(tokens, single_req)
+        results.append(out)
+        st = out.get("stats") or {}
+        total_reads += int(st.get("reads") or 0)
+        total_writes += int(st.get("writes") or 0)
+        total_time_ms += float(st.get("time_ms") or 0)
+
+    last = results[-1]
+    return {
+        "ok": all(r.get("ok") for r in results),
+        "rows": last.get("rows", []),
+        "stats": {
+            "reads": total_reads,
+            "writes": total_writes,
+            "time_ms": total_time_ms,
+            "statements_run": len(results),
+        },
+        "all_results": results,
+    }
+
+
+def _run_single(tokens, req: QueryRequest):
     base_path = req.base_path or DATA_DIR
     catalog   = _load_catalog()
 
     try:
-        qd = parser.parse(tokenize(sql))
+        qd = parser.parse(tokens)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -448,6 +510,175 @@ def run_query(req: QueryRequest):
 
             rows = [codec.decode(r) for r in results]
             return {"ok": True, "rows": rows, "stats": {**stats, "time_ms": (t1 - t0) * 1000}}
+        finally:
+            lock_manager.release_all(tx_id)
+
+    # ─────────────────────────────────────────────────────
+    # ORDER BY (External Merge Sort)
+    # ─────────────────────────────────────────────────────
+    if qtype == "SELECT_ORDER":
+        table = qd["table"]
+        if table not in catalog:
+            raise HTTPException(status_code=404, detail="Tabla no existe")
+        meta    = catalog[table]
+        columns = meta.get("columns", [])
+        codec   = Codec(columns, meta.get("column_sizes") or {})
+        order_col = qd["order_col"]
+        if not any(c.get("name") == order_col for c in columns):
+            raise HTTPException(status_code=400, detail=f"Columna '{order_col}' no existe en {table}")
+
+        tx_id = threading.get_ident()
+        lock_manager.acquire_shared(table, tx_id)
+        try:
+            _get_or_open_table(table, meta)
+            t0 = time.perf_counter()
+            sorted_recs, stats = engine.select_order(table, codec.key_extractor(order_col))
+            t1 = time.perf_counter()
+            if qd.get("order_dir", "ASC") == "DESC":
+                sorted_recs = list(reversed(sorted_recs))
+            rows = [codec.decode(r) for r in sorted_recs]
+            return {
+                "ok": True,
+                "rows": rows,
+                "stats": {
+                    "reads": stats.get("scan_reads", 0),
+                    "writes": 0,
+                    "runs": stats.get("runs_generated"),
+                    "phase1_sec": stats.get("phase1_sec"),
+                    "phase2_sec": stats.get("phase2_sec"),
+                    "time_ms": (t1 - t0) * 1000,
+                },
+            }
+        finally:
+            lock_manager.release_all(tx_id)
+
+    # ─────────────────────────────────────────────────────
+    # GROUP BY (External Hashing)
+    # ─────────────────────────────────────────────────────
+    if qtype == "SELECT_GROUP":
+        table = qd["table"]
+        if table not in catalog:
+            raise HTTPException(status_code=404, detail="Tabla no existe")
+        meta    = catalog[table]
+        columns = meta.get("columns", [])
+        codec   = Codec(columns, meta.get("column_sizes") or {})
+        group_col = qd["group_col"]
+        if group_col is not None and not any(c.get("name") == group_col for c in columns):
+            raise HTTPException(status_code=400, detail=f"Columna '{group_col}' no existe en {table}")
+
+        # Sólo soportamos un agregado por query por ahora.
+        agg_items = [it for it in qd["projection"]["items"] if it["kind"] == "AGG"]
+        if not agg_items:
+            raise HTTPException(status_code=400, detail="GROUP BY requiere un agregado")
+        if len(agg_items) > 1:
+            raise HTTPException(status_code=400, detail="Sólo se soporta un agregado por query")
+        agg = agg_items[0]
+        op = agg["op"]
+        arg = agg["arg"]
+        alias = agg["alias"] or (f"{op}({arg})")
+
+        value_fn = None
+        if op != "COUNT":
+            if not any(c.get("name") == arg for c in columns):
+                raise HTTPException(status_code=400, detail=f"Columna '{arg}' no existe en {table}")
+            value_fn = codec.key_extractor(arg)
+
+        tx_id = threading.get_ident()
+        lock_manager.acquire_shared(table, tx_id)
+        try:
+            _get_or_open_table(table, meta)
+            t0 = time.perf_counter()
+            # group_col=None → agregado global (sin GROUP BY): partición a un sólo bucket.
+            key_fn = codec.key_extractor(group_col) if group_col is not None else (lambda _r: 0)
+            group_dict, stats = engine.select_group(
+                table, key_fn,
+                value_fn=value_fn, op=op,
+            )
+            t1 = time.perf_counter()
+            if group_col is None:
+                # Resultado: una sola fila con el agregado global.
+                agg_value = next(iter(group_dict.values()), 0 if op == "COUNT" else None)
+                rows = [{alias: agg_value}]
+            else:
+                rows = [{group_col: k, alias: v} for k, v in group_dict.items()]
+            return {
+                "ok": True,
+                "rows": rows,
+                "stats": {
+                    "reads": stats.get("scan_reads", 0),
+                    "writes": 0,
+                    "groups": stats.get("groups"),
+                    "buckets": stats.get("buckets"),
+                    "phase1_sec": stats.get("phase1_sec"),
+                    "phase2_sec": stats.get("phase2_sec"),
+                    "time_ms": (t1 - t0) * 1000,
+                },
+            }
+        finally:
+            lock_manager.release_all(tx_id)
+
+    # ─────────────────────────────────────────────────────
+    # JOIN (Hash JOIN via External Hashing)
+    # ─────────────────────────────────────────────────────
+    if qtype == "SELECT_JOIN":
+        left_name  = qd["left"]
+        right_name = qd["right"]
+        if left_name not in catalog:
+            raise HTTPException(status_code=404, detail=f"Tabla '{left_name}' no existe")
+        if right_name not in catalog:
+            raise HTTPException(status_code=404, detail=f"Tabla '{right_name}' no existe")
+
+        l_meta = catalog[left_name]
+        r_meta = catalog[right_name]
+        l_codec = Codec(l_meta.get("columns", []), l_meta.get("column_sizes") or {})
+        r_codec = Codec(r_meta.get("columns", []), r_meta.get("column_sizes") or {})
+
+        on_left  = qd["on_left"]
+        on_right = qd["on_right"]
+        if not any(c.get("name") == on_left for c in l_meta.get("columns", [])):
+            raise HTTPException(status_code=400, detail=f"Columna '{on_left}' no existe en {left_name}")
+        if not any(c.get("name") == on_right for c in r_meta.get("columns", [])):
+            raise HTTPException(status_code=400, detail=f"Columna '{on_right}' no existe en {right_name}")
+
+        tx_id = threading.get_ident()
+        # Lock ambas tablas en orden alfabético para evitar deadlock entre joins.
+        first, second = sorted([left_name, right_name])
+        lock_manager.acquire_shared(first, tx_id)
+        lock_manager.acquire_shared(second, tx_id)
+        try:
+            _get_or_open_table(left_name, l_meta)
+            _get_or_open_table(right_name, r_meta)
+
+            t0 = time.perf_counter()
+            matches, stats = engine.select_join(
+                left_name, right_name,
+                l_codec.key_extractor(on_left),
+                r_codec.key_extractor(on_right),
+            )
+            t1 = time.perf_counter()
+
+            rows = []
+            for l_rec, r_rec in matches:
+                l_row = l_codec.decode(l_rec)
+                r_row = r_codec.decode(r_rec)
+                merged = {f"{left_name}.{k}": v for k, v in l_row.items()}
+                merged.update({f"{right_name}.{k}": v for k, v in r_row.items()})
+                rows.append(merged)
+
+            total_reads = stats.get("left_scan_reads", 0) + stats.get("right_scan_reads", 0)
+            return {
+                "ok": True,
+                "rows": rows,
+                "stats": {
+                    "reads": total_reads,
+                    "writes": 0,
+                    "matches": stats.get("match_count"),
+                    "buckets": stats.get("buckets"),
+                    "phase1_sec": stats.get("phase1_sec"),
+                    "phase2_sec": stats.get("phase2_sec"),
+                    "time_ms": (t1 - t0) * 1000,
+                },
+            }
         finally:
             lock_manager.release_all(tx_id)
 
