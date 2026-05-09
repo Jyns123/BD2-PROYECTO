@@ -27,7 +27,16 @@ class SequentialFile:
         self.dm = self._UnifiedDM(self.main_dm, self.overflow_dm)
 
         self.overflow_limit = 200
-        self._overflow_count = 0
+        self._overflow_count = self._count_overflow_records()
+
+    def _count_overflow_records(self) -> int:
+        """Cuenta registros existentes en el archivo overflow (para reaberturas)."""
+        count = 0
+        total_pages = self.overflow_dm._get_total_pages()
+        for page_id in range(1, total_pages):
+            raw = self.overflow_dm.read_page(page_id)
+            count += Page.from_bytes(raw, self.record_size).get_record_count()
+        return count
 
     class _UnifiedDM:
         """Suma reads/writes de main y overflow para métricas consistentes."""
@@ -66,14 +75,11 @@ class SequentialFile:
             self.rebuild()
    
 
-    # SCAN (para SELECT *)
     def scan(self):
-        # main ya está ordenado; overflow puede no estarlo: sort final por key
         results = list(self.main.scan()) + list(self.overflow.scan())
         results.sort(key=self.key)
         return results
 
-    # SEARCH
     def search(self, key_value):
         results = []
         try:
@@ -92,7 +98,6 @@ class SequentialFile:
         except Exception as e:
             raise IOError(f"Error en search: {e}")
 
-    # RANGE SEARCH
     def range_search(self, begin, end):
         results = []
         try:

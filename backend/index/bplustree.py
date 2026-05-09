@@ -1,4 +1,7 @@
+import struct
 from storage.disk_manager import DiskManager, PAGE_SIZE
+
+KEY_SIZE = 8   # float64 (double) — soporta int y float sin pérdida de precisión
 
 
 class Node:
@@ -32,8 +35,8 @@ class BPlusTree:
 
         offset = 5
         for k in node.keys:
-            data[offset:offset+4] = int(k).to_bytes(4, 'big')
-            offset += 4
+            struct.pack_into('>d', data, offset, float(k))
+            offset += KEY_SIZE
 
         next_ptr = node.next if node.next >= 0 else 0
         data[offset:offset+4] = next_ptr.to_bytes(4, 'big')
@@ -58,9 +61,9 @@ class BPlusTree:
         offset = 5
 
         for _ in range(n_keys):
-            k = int.from_bytes(data[offset:offset+4], 'big')
+            k, = struct.unpack_from('>d', data, offset)
             node.keys.append(k)
-            offset += 4
+            offset += KEY_SIZE
 
         node.next = int.from_bytes(data[offset:offset+4], 'big')
         if node.next == 0:
