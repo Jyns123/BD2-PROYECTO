@@ -10,7 +10,7 @@ Este proyecto es un mini-SGBD hecho desde cero para el curso de BD2. Implementa 
 | Nombre | GitHub |
 |--------|--------|
 | Jyns Ordóñez | [@Jyns123](https://github.com/Jyns123) |
-| Denzel Bautista | - |
+| Denzel Bautista | [@denzelbautista](https://github.com/denzelbautista) |
 | Gian Aedo | - |
 
 ---
