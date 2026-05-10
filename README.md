@@ -240,7 +240,7 @@ React 19 y Tailwind CSS consumiendo la API REST del backend.
 
 
 ```bash
-git clone https://github.com/<usuario>/BD2-PROYECTO.git
+git clone https://github.com/Jyns123/BD2-PROYECTO.git
 cd BD2-PROYECTO
 
 docker compose up --build
